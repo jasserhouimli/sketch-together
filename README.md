@@ -14,17 +14,17 @@ board through a room link.
 
 ## MVP milestones
 
-1. **Draw locally** — board screen, toolbar, pointer drawing, color/width, clear.
-2. **Editable items** — strokes + notes as items; add/move/edit/delete; eraser.
-3. **Board rooms** — unique board ID, load by ID, copy-link control.
-4. **Live collaboration** — SignalR room per board, validated action broadcast.
-5. **Save boards** — persist after accepted actions (debounced), reload on open.
-6. **Polish** — responsive, touch, loading/error states, docs, demo.
+1. [ ] **Draw locally** — board screen, toolbar, pointer drawing, color/width, clear.
+2. [ ] **Editable items** — strokes + notes as items; add/move/edit/delete; eraser.
+3. [ ] **Board rooms** — unique board ID, load by ID, copy-link control.
+4. [ ] **Live collaboration** — SignalR room per board, validated action broadcast.
+5. [ ] **Save boards** — persist after accepted actions (debounced), reload on open.
+6. [ ] **Polish** — responsive, touch, loading/error states, docs, demo.
 
 ## Run it
 
 ```powershell
-# Server (http://localhost:5000)
+# Server (http://localhost:5248)
 dotnet run --project src/Server
 
 # Client (http://localhost:5173)

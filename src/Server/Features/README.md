@@ -1,7 +1,8 @@
 # Features (vertical slices)
 
 Each feature owns its endpoint(s), validation, persistence, and tests in one
-folder. Shared kernel (ids, results, middleware) lives in `Common/`.
+folder. Shared kernel (ids, results, middleware) will live in `Common/` once
+the second slice needs it — no speculative shared code before then.
 
 ```text
 Features/
@@ -17,4 +18,5 @@ Rules:
 - No `Services/`, `Managers/`, or `Utils/` folders.
 - The realtime hub validates every action and broadcasts accepted actions to
   the board room. Server order is the ordering (no CRDT in v1).
-- Persistence details stay inside the slice (SQLite via EF Core).
+- Persistence details stay inside the slice (SQLite via EF Core, added with
+  the first slice that needs storage).
