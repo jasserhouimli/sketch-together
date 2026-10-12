@@ -14,7 +14,7 @@ board through a room link.
 
 ## MVP milestones
 
-1. [ ] **Draw locally** — board screen, toolbar, pointer drawing, color/width, clear.
+1. [x] **Draw locally** — board screen, toolbar, pointer drawing, color/width, clear.
 2. [ ] **Editable items** — strokes + notes as items; add/move/edit/delete; eraser.
 3. [ ] **Board rooms** — unique board ID, load by ID, copy-link control.
 4. [ ] **Live collaboration** — SignalR room per board, validated action broadcast.
