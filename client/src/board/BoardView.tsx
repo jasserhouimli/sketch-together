@@ -1,17 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { toRelative } from "./geometry";
+import { findItemAt } from "./hitTest";
 import { renderBoard, renderItem } from "./renderer";
+import type { Tool } from "./tools";
 import { isValidStroke, newId, type Board, type Point } from "./types";
 
 /** Canvas board with pointer drawing. Committed strokes lift to `board` state. */
 export default function BoardView({
   board,
   onBoardChange,
+  onDeleteItem,
+  tool,
   color,
   width,
 }: {
   board: Board;
   onBoardChange: (board: Board) => void;
+  onDeleteItem: (id: string) => void;
+  tool: Tool;
   color: string;
   width: number;
 }) {
@@ -45,8 +51,24 @@ export default function BoardView({
     return toRelative(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
   };
 
+  const eraseAt = (e: React.PointerEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const p = eventPoint(e);
+    if (!p) return;
+    const hit = findItemAt(board.items, p, rect.width, rect.height);
+    if (hit) onDeleteItem(hit.id);
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (tool === "eraser") {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      eraseAt(e);
+      return;
+    }
+    if (tool !== "pen") return;
     const p = eventPoint(e);
     if (!p) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -55,6 +77,11 @@ export default function BoardView({
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    if (tool === "eraser") {
+      if (e.buttons === 0) return;
+      eraseAt(e);
+      return;
+    }
     const drawing = drawingRef.current;
     if (!drawing) return;
     const p = eventPoint(e);
@@ -79,7 +106,7 @@ export default function BoardView({
   return (
     <canvas
       ref={canvasRef}
-      className="board-canvas"
+      className={`board-canvas tool-${tool}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={finishStroke}
