@@ -1,11 +1,28 @@
 import { useEffect, useRef, useState } from "react";
-import { toRelative } from "./geometry";
-import { findItemAt } from "./hitTest";
+import { toPixels, toRelative } from "./geometry";
+import { findItemAt, findNoteAt } from "./hitTest";
 import { renderBoard, renderItem } from "./renderer";
 import type { Tool } from "./tools";
-import { isValidStroke, newId, type Board, type Point } from "./types";
+import {
+  isValidNote,
+  isValidStroke,
+  newId,
+  type Board,
+  type NoteItem,
+  type Point,
+} from "./types";
 
-/** Canvas board with pointer drawing. Committed strokes lift to `board` state. */
+export const DEFAULT_NOTE_COLOR = "#fff2a8";
+export const DEFAULT_NOTE_TEXT = "New note";
+
+interface Editing {
+  id: string;
+  draft: string;
+  left: number;
+  top: number;
+}
+
+/** Canvas board: pen draws, eraser deletes, note tool adds/moves/edits notes. */
 export default function BoardView({
   board,
   onBoardChange,
@@ -23,7 +40,9 @@ export default function BoardView({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef<{ id: string; points: Point[] } | null>(null);
+  const moveRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
   const [, setLiveTick] = useState(0);
+  const [editing, setEditing] = useState<Editing | null>(null);
 
   // Redraw committed items whenever the board changes.
   useEffect(() => {
@@ -61,11 +80,41 @@ export default function BoardView({
     if (hit) onDeleteItem(hit.id);
   };
 
+  const updateNote = (id: string, patch: Partial<NoteItem>) => {
+    onBoardChange({
+      ...board,
+      items: board.items.map((i) => (i.id === id && i.type === "note" ? { ...i, ...patch } : i)),
+    });
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     if (tool === "eraser") {
       e.currentTarget.setPointerCapture(e.pointerId);
       eraseAt(e);
+      return;
+    }
+    if (tool === "note") {
+      const canvas = canvasRef.current;
+      const p = eventPoint(e);
+      if (!canvas || !p) return;
+      const rect = canvas.getBoundingClientRect();
+      const hit = findNoteAt(board.items, p, rect.width, rect.height);
+      e.currentTarget.setPointerCapture(e.pointerId);
+      if (hit && hit.type === "note") {
+        // Grab the note: keep the offset so it doesn't jump to the cursor.
+        moveRef.current = { id: hit.id, dx: hit.x - p.x, dy: hit.y - p.y };
+      } else {
+        const note: NoteItem = {
+          id: newId(),
+          type: "note",
+          x: p.x,
+          y: p.y,
+          text: DEFAULT_NOTE_TEXT,
+          color: DEFAULT_NOTE_COLOR,
+        };
+        if (isValidNote(note)) onBoardChange({ ...board, items: [...board.items, note] });
+      }
       return;
     }
     if (tool !== "pen") return;
@@ -82,6 +131,14 @@ export default function BoardView({
       eraseAt(e);
       return;
     }
+    const move = moveRef.current;
+    if (move) {
+      const p = eventPoint(e);
+      if (!p) return;
+      const clamp = (v: number) => Math.min(1, Math.max(0, v));
+      updateNote(move.id, { x: clamp(p.x + move.dx), y: clamp(p.y + move.dy) });
+      return;
+    }
     const drawing = drawingRef.current;
     if (!drawing) return;
     const p = eventPoint(e);
@@ -94,6 +151,14 @@ export default function BoardView({
     if (canvas) draw(canvas, board, drawing.points, color, width);
   };
 
+  const onPointerUp = () => {
+    if (moveRef.current) {
+      moveRef.current = null;
+      return;
+    }
+    finishStroke();
+  };
+
   const finishStroke = () => {
     const drawing = drawingRef.current;
     drawingRef.current = null;
@@ -103,15 +168,58 @@ export default function BoardView({
     onBoardChange({ ...board, items: [...board.items, stroke] });
   };
 
+  const onDoubleClick = (e: React.MouseEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const p = toRelative(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+    const hit = findNoteAt(board.items, p, rect.width, rect.height);
+    if (hit && hit.type === "note") {
+      const pos = toPixels({ x: hit.x, y: hit.y }, rect.width, rect.height);
+      setEditing({ id: hit.id, draft: hit.text, left: pos.x, top: pos.y });
+    }
+  };
+
+  const commitEdit = () => {
+    if (!editing) return;
+    const draft = editing.draft;
+    const id = editing.id;
+    setEditing(null);
+    const current = board.items.find((i) => i.id === id);
+    if (current?.type !== "note" || current.text === draft) return;
+    const updated: NoteItem = { ...current, text: draft.slice(0, 2000) };
+    if (isValidNote(updated)) updateNote(id, { text: updated.text });
+  };
+
   return (
-    <canvas
-      ref={canvasRef}
-      className={`board-canvas tool-${tool}`}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={finishStroke}
-      onPointerCancel={() => (drawingRef.current = null)}
-    />
+    <div className="board-wrap">
+      <canvas
+        ref={canvasRef}
+        className={`board-canvas tool-${tool}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => {
+          drawingRef.current = null;
+          moveRef.current = null;
+        }}
+        onDoubleClick={onDoubleClick}
+      />
+      {editing && (
+        <textarea
+          className="note-editor"
+          style={{ left: editing.left, top: editing.top }}
+          autoFocus
+          value={editing.draft}
+          onChange={(e) => setEditing({ ...editing, draft: e.target.value })}
+          onBlur={commitEdit}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setEditing(null);
+          }}
+          aria-label="Edit note"
+        />
+      )}
+    </div>
   );
 }
 
