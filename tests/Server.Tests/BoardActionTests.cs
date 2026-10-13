@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using SketchTogether.Server.Features.Boards;
 
 namespace Server.Tests;
@@ -89,5 +90,55 @@ public sealed class BoardActionValidationTests
     public void Clear_accepts_any_item()
     {
         Assert.True(BoardActionValidator.Validate("board1", Env("board.clear", "{}")).IsSuccess);
+    }
+}
+
+public sealed class BoardActionApplierTests
+{
+    private static JsonArray Items(string raw) => (JsonArray)JsonNode.Parse(raw)!;
+
+    private static ValidatedAction Act(string type, string itemJson, string? id = null) =>
+        new(type, id, Json(itemJson));
+
+    private static JsonElement Json(string raw)
+    {
+        using var doc = JsonDocument.Parse(raw);
+        return doc.RootElement.Clone();
+    }
+
+    [Fact]
+    public void Add_appends_and_readd_replaces()
+    {
+        var items = Items("[]");
+        var stroke = """{"id":"s1","type":"stroke","color":"#222","width":4,"points":[{"x":0.1,"y":0.1}]}""";
+        var once = BoardActionApplier.Apply(items, Act("stroke.add", stroke, "s1"));
+        Assert.Single(once);
+        Assert.Empty(items); // input untouched
+        var twice = BoardActionApplier.Apply(once, Act("stroke.add", stroke, "s1"));
+        Assert.Single(twice);
+    }
+
+    [Fact]
+    public void Move_repositions_note_only()
+    {
+        var items = Items("""[{"id":"n1","type":"note","x":0.1,"y":0.1,"text":"t","color":"#fff2a8"},{"id":"s1","type":"stroke","color":"#222","width":4,"points":[{"x":0.3,"y":0.3}]}]""");
+        var moved = BoardActionApplier.Apply(items, Act("item.move", """{"id":"n1","x":0.5,"y":0.5}""", "n1"));
+        Assert.Equal(0.5, moved[0]!["x"]!.GetValue<double>());
+        var strokeMove = BoardActionApplier.Apply(moved, Act("item.move", """{"id":"s1","x":0.9,"y":0.9}""", "s1"));
+        Assert.Equal(2, strokeMove.Count); // stroke untouched, nothing crashes
+        var missing = BoardActionApplier.Apply(moved, Act("item.move", """{"id":"ghost","x":0.9,"y":0.9}""", "ghost"));
+        Assert.Equal(2, missing.Count);
+    }
+
+    [Fact]
+    public void Delete_removes_and_clear_empties()
+    {
+        var items = Items("""[{"id":"a","type":"note","x":0.1,"y":0.1,"text":"t","color":"#fff2a8"},{"id":"b","type":"note","x":0.2,"y":0.2,"text":"u","color":"#fff2a8"}]""");
+        var one = BoardActionApplier.Apply(items, Act("item.delete", """{"id":"a"}""", "a"));
+        Assert.Single(one);
+        var cleared = BoardActionApplier.Apply(one, Act("board.clear", "{}"));
+        Assert.Empty(cleared);
+        var missing = BoardActionApplier.Apply(cleared, Act("item.delete", """{"id":"ghost"}""", "ghost"));
+        Assert.Empty(missing);
     }
 }
