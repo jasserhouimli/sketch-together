@@ -8,3 +8,6 @@ export const PEN_COLORS = [
 ] as const;
 
 export const PEN_WIDTHS = [2, 4, 8, 16] as const;
+
+export const DEFAULT_COLOR = "#222222";
+export const DEFAULT_WIDTH = 4;

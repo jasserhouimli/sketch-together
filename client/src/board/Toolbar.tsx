@@ -1,7 +1,7 @@
 import { PEN_COLORS, PEN_WIDTHS } from "./pen";
 import type { Tool } from "./tools";
 
-/** Toolbar: tool switch, pen color/width, and board clear. */
+/** Toolbar: tool switch, pen color/width, board clear, plus room extras. */
 export default function Toolbar({
   tool,
   color,
@@ -10,6 +10,7 @@ export default function Toolbar({
   onColorChange,
   onWidthChange,
   onClear,
+  extra,
 }: {
   tool: Tool;
   color: string;
@@ -18,6 +19,7 @@ export default function Toolbar({
   onColorChange: (color: string) => void;
   onWidthChange: (width: number) => void;
   onClear: () => void;
+  extra?: React.ReactNode;
 }) {
   const toolBtn = (t: Tool, label: string) => (
     <button
@@ -75,6 +77,7 @@ export default function Toolbar({
       <button type="button" className="clear-btn" onClick={onClear}>
         Clear
       </button>
+      {extra}
     </div>
   );
 }

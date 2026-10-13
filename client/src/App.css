@@ -21,6 +21,39 @@ body {
   position: relative;
 }
 
+.notice {
+  max-width: 420px;
+  margin: 20vh auto;
+  text-align: center;
+}
+
+.home {
+  max-width: 420px;
+  margin: 20vh auto;
+  text-align: center;
+  padding: 0 16px;
+}
+
+.create-btn {
+  font: inherit;
+  font-size: 18px;
+  padding: 10px 24px;
+  border: none;
+  border-radius: 10px;
+  background: #1971c2;
+  color: #fff;
+  cursor: pointer;
+}
+
+.create-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.error {
+  color: #c92a2a;
+}
+
 .toolbar {
   position: absolute;
   top: 12px;
