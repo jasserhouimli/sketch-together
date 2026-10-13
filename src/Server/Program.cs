@@ -4,6 +4,7 @@ using SketchTogether.Server.Features.Boards;
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<BoardsDbContext>(o =>
     o.UseSqlite(builder.Configuration.GetConnectionString("Boards") ?? "Data Source=boards.db"));
+builder.Services.AddSignalR();
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
@@ -31,5 +32,7 @@ app.MapGet("/api/boards/{id}", async (string id, BoardsDbContext db, Cancellatio
         return Results.NotFound(new { error = "No board with that link. Check the URL or create a new board." });
     return Results.Ok(BoardDto.From(row));
 });
+
+app.MapHub<BoardHub>("/hubs/board");
 
 app.Run();
