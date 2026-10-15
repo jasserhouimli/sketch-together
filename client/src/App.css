@@ -68,6 +68,31 @@ body {
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   z-index: 10;
+  max-width: calc(100vw - 16px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+@media (max-width: 640px) {
+  .toolbar {
+    top: 8px;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+
+  .swatch {
+    width: 28px;
+    height: 28px;
+  }
+
+  .width-btn {
+    width: 36px;
+    height: 32px;
+  }
+
+  .empty-hint {
+    padding: 0 24px;
+  }
 }
 
 .toolbar-group {
