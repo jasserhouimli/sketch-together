@@ -1,44 +1,108 @@
-# SketchTogether — Collaborative Whiteboard
+# SketchTogether
 
-A real-time web app where people draw, add notes, and collaborate on a shared
-board through a room link.
+A real-time collaborative whiteboard. Create a board, share the link, and draw
+together — strokes and sticky notes sync live between everyone in the room, and
+everything is saved so the board is still there when you come back.
 
 ![ci](https://github.com/jasserhouimli/sketch-together/actions/workflows/ci.yml/badge.svg)
+![license](https://img.shields.io/github/license/jasserhouimli/sketch-together)
 
-## Stack
+## What it does
 
-- **Server:** ASP.NET Core (.NET 10), modular monolith + vertical slices,
-  SignalR rooms, SQLite persistence.
-- **Client:** React + TypeScript + Vite, HTML canvas rendering.
-- **Tests:** xUnit (`dotnet test`), Vitest for the client (later).
+- **Draw together in real time.** Freehand strokes with color and width choices
+  appear on every connected screen as they happen.
+- **Sticky notes.** Click to place a note, drag it around, double-click to edit
+  the text, erase it when you're done.
+- **Rooms via link.** Each board gets a short shareable URL (`#/b/…`). No
+  accounts — if you have the link, you're in the room.
+- **Presence and sync status.** See how many people are connected and whether
+  you're live, reconnecting, or offline. Every edit shows a save state
+  (`Saving…` → `Saved 14:32`), backed by the server on each accepted action.
+- **Undo / redo.** Session history (`Ctrl+Z` / `Ctrl+Y`) works across the room:
+  undoing broadcasts the inverse action so all clients converge.
+- **Persistent boards.** Refresh the page, close the laptop, come back next
+  week — the board reloads exactly as you left it.
 
-## MVP milestones
+## Quickstart
 
-1. [x] **Draw locally** — board screen, toolbar, pointer drawing, color/width, clear.
-2. [x] **Editable items** — strokes + notes as items; add/move/edit/delete; eraser.
-3. [x] **Board rooms** — unique board ID, load by ID, copy-link control.
-4. [x] **Live collaboration** — SignalR room per board, validated action broadcast.
-5. [x] **Save boards** — persist after accepted actions (debounced), reload on open.
-6. [ ] **Polish** — responsive, touch, loading/error states, docs, demo.
-
-## Run it
+Requirements: [.NET 10 SDK](https://dotnet.microsoft.com/download) and
+[Node.js 20+](https://nodejs.org/).
 
 ```powershell
-# Server (http://localhost:5248)
+# Terminal 1 — API + realtime hub (http://localhost:5248)
 dotnet run --project src/Server
 
-# Client (http://localhost:5173)
+# Terminal 2 — web client (http://localhost:5173)
 cd client
 npm install
 npm run dev
 ```
 
-## Protocol (v1)
+Open the client, click **New board**, then open the copied link in a second
+window (or send it to a friend on the same network, swapping `localhost` for
+your machine's LAN IP). Draw in one window and watch the other.
 
-Server-ordered actions over SignalR (WebSocket transport). Coordinates are
-relative to board size (`0..1`) so boards scale across screens.
+To run the checks:
 
-- `stroke.add`, `note.add`, `note.update`, `item.move`, `item.delete`, `board.clear`
+```powershell
+dotnet test SketchTogether.slnx   # server: validation, applier, persistence
+cd client; npm test                # client: model, geometry, hit-testing, history
+```
 
-Every action carries `boardId`, `actionId` (idempotency), and the item.
-The server validates board membership and shape before broadcasting.
+## How it works
+
+```text
+Browser ──HTTPS/WS──▶ ASP.NET Core ──▶ SQLite
+   │                        │
+   │  SignalR room          │  validate → apply → persist → broadcast
+   │  per board             │
+   └── canvas ◀── actions ──┘
+```
+
+**Client** (`client/src/`). React + TypeScript + Vite. The board is a plain
+array of items rendered on `<canvas>`; all coordinates are relative to board
+size (`0..1`), so a phone and a desktop see the same drawing. Pointer events
+cover mouse, touch, and stylus. A sync hook owns one SignalR connection per
+room: it sends local mutations, applies accepted remote actions (ignoring
+duplicates by `actionId`), and reports connection + save state.
+
+**Server** (`src/Server/`). ASP.NET Core organized as vertical slices — each
+feature owns its endpoints, validation, persistence, and tests:
+
+```text
+Features/Boards/
+├── Board.cs / BoardsDbContext.cs   # room rows + EF Core SQLite store
+├── BoardIds.cs                     # short shareable room IDs
+├── BoardActions.cs                 # action envelope + validation
+├── BoardActionApplier.cs           # pure item-list transitions
+└── BoardHub.cs                     # SignalR room: join, ordered broadcast, presence
+```
+
+There is deliberately no CRDT: the server orders accepted actions, so every
+client converges by applying them in arrival order. Malformed actions are
+rejected before broadcast; redeliveries are deduplicated by `actionId`.
+
+**Protocol (v1).** One envelope for everything —
+`{ boardId, actionId, type, item }` — with `stroke.add`, `note.add`,
+`note.update`, `item.move`, `item.delete`, and `board.clear`.
+
+## Project status
+
+| Area | State |
+|---|---|
+| Local drawing, notes, eraser | Done |
+| Rooms, share links | Done |
+| Live sync, presence, save indicator | Done |
+| Undo / redo | Done (session-scoped) |
+| Live cursors, export to image, accounts, offline queue | Planned |
+
+## Limits worth knowing
+
+- Note drags broadcast on release, not per frame.
+- Offline edits stay on the device; there is no send queue yet.
+- Presence is a participant count — no names or live cursors.
+- Boards are public to anyone with the link; there is no access control.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
