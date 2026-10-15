@@ -197,6 +197,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         tool={tool}
         color={color}
         width={width}
+        showEmptyHint={state.board.items.length === 0}
         onStrokeAdd={(stroke) => {
           if (!isValidStroke(stroke)) return;
           upsertLocal(stroke);

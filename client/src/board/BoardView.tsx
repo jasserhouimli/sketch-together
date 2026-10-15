@@ -37,11 +37,13 @@ export default function BoardView({
   onNoteMoveEnd,
   onNoteEdit,
   onDeleteItem,
+  showEmptyHint,
 }: {
   board: Board;
   tool: Tool;
   color: string;
   width: number;
+  showEmptyHint: boolean;
   onStrokeAdd: (stroke: { id: string; color: string; width: number; points: Point[] }) => void;
   onNoteAdd: (note: { id: string; x: number; y: number; text: string; color: string }) => void;
   onNoteMove: (id: string, x: number, y: number) => void;
@@ -210,6 +212,12 @@ export default function BoardView({
         }}
         onDoubleClick={onDoubleClick}
       />
+      {showEmptyHint && (
+        <div className="empty-hint" aria-hidden>
+          <p>Pick the pen and draw — or add a note.</p>
+          <p>Share the link above to collaborate.</p>
+        </div>
+      )}
       {editing && (
         <textarea
           className="note-editor"
