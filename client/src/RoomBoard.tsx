@@ -5,7 +5,7 @@ import { DEFAULT_COLOR, DEFAULT_WIDTH } from "./board/pen";
 import type { Tool } from "./board/tools";
 import { BoardApiError, fetchBoard } from "./room/api";
 import { roomUrl } from "./room/route";
-import type { Board } from "./board/types";
+import { isValidNote, isValidStroke, type Board, type BoardItem, type NoteItem } from "./board/types";
 
 type LoadState =
   | { status: "loading" }
@@ -56,6 +56,22 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
 
   const setBoard = (board: Board) => setState({ status: "ready", board });
 
+  const addItem = (item: BoardItem) =>
+    setState((s) => (s.status === "ready" ? { ...s, board: { ...s.board, items: [...s.board.items, item] } } : s));
+
+  const patchNote = (id: string, patch: Partial<NoteItem>) =>
+    setState((s) =>
+      s.status === "ready"
+        ? {
+            ...s,
+            board: {
+              ...s.board,
+              items: s.board.items.map((i) => (i.id === id && i.type === "note" ? { ...i, ...patch } : i)),
+            },
+          }
+        : s,
+    );
+
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(roomUrl(roomId));
@@ -84,13 +100,21 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
       />
       <BoardView
         board={state.board}
-        onBoardChange={setBoard}
-        onDeleteItem={(id) =>
-          setBoard({ ...state.board, items: state.board.items.filter((i) => i.id !== id) })
-        }
         tool={tool}
         color={color}
         width={width}
+        onStrokeAdd={(stroke) => {
+          if (isValidStroke(stroke)) addItem(stroke);
+        }}
+        onNoteAdd={(note) => {
+          if (isValidNote(note)) addItem(note);
+        }}
+        onNoteMove={(id, x, y) => patchNote(id, { x, y })}
+        onNoteMoveEnd={() => {}}
+        onNoteEdit={(id, text) => patchNote(id, { text })}
+        onDeleteItem={(id) =>
+          setBoard({ ...state.board, items: state.board.items.filter((i) => i.id !== id) })
+        }
       />
     </main>
   );

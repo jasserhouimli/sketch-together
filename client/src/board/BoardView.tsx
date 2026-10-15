@@ -8,7 +8,6 @@ import {
   isValidStroke,
   newId,
   type Board,
-  type NoteItem,
   type Point,
 } from "./types";
 
@@ -22,21 +21,33 @@ interface Editing {
   top: number;
 }
 
-/** Canvas board: pen draws, eraser deletes, note tool adds/moves/edits notes. */
+/**
+ * Canvas board: pen draws, eraser deletes, note tool adds/moves/edits notes.
+ * Every mutation goes through a callback so the parent can persist and
+ * broadcast it; the board prop stays the single source of truth.
+ */
 export default function BoardView({
   board,
-  onBoardChange,
-  onDeleteItem,
   tool,
   color,
   width,
+  onStrokeAdd,
+  onNoteAdd,
+  onNoteMove,
+  onNoteMoveEnd,
+  onNoteEdit,
+  onDeleteItem,
 }: {
   board: Board;
-  onBoardChange: (board: Board) => void;
-  onDeleteItem: (id: string) => void;
   tool: Tool;
   color: string;
   width: number;
+  onStrokeAdd: (stroke: { id: string; color: string; width: number; points: Point[] }) => void;
+  onNoteAdd: (note: { id: string; x: number; y: number; text: string; color: string }) => void;
+  onNoteMove: (id: string, x: number, y: number) => void;
+  onNoteMoveEnd: (id: string) => void;
+  onNoteEdit: (id: string, text: string) => void;
+  onDeleteItem: (id: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef<{ id: string; points: Point[] } | null>(null);
@@ -80,13 +91,6 @@ export default function BoardView({
     if (hit) onDeleteItem(hit.id);
   };
 
-  const updateNote = (id: string, patch: Partial<NoteItem>) => {
-    onBoardChange({
-      ...board,
-      items: board.items.map((i) => (i.id === id && i.type === "note" ? { ...i, ...patch } : i)),
-    });
-  };
-
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     if (tool === "eraser") {
@@ -105,15 +109,15 @@ export default function BoardView({
         // Grab the note: keep the offset so it doesn't jump to the cursor.
         moveRef.current = { id: hit.id, dx: hit.x - p.x, dy: hit.y - p.y };
       } else {
-        const note: NoteItem = {
+        const note = {
           id: newId(),
-          type: "note",
+          type: "note" as const,
           x: p.x,
           y: p.y,
           text: DEFAULT_NOTE_TEXT,
           color: DEFAULT_NOTE_COLOR,
         };
-        if (isValidNote(note)) onBoardChange({ ...board, items: [...board.items, note] });
+        if (isValidNote(note)) onNoteAdd(note);
       }
       return;
     }
@@ -136,7 +140,7 @@ export default function BoardView({
       const p = eventPoint(e);
       if (!p) return;
       const clamp = (v: number) => Math.min(1, Math.max(0, v));
-      updateNote(move.id, { x: clamp(p.x + move.dx), y: clamp(p.y + move.dy) });
+      onNoteMove(move.id, clamp(p.x + move.dx), clamp(p.y + move.dy));
       return;
     }
     const drawing = drawingRef.current;
@@ -152,8 +156,10 @@ export default function BoardView({
   };
 
   const onPointerUp = () => {
-    if (moveRef.current) {
-      moveRef.current = null;
+    const move = moveRef.current;
+    moveRef.current = null;
+    if (move) {
+      onNoteMoveEnd(move.id);
       return;
     }
     finishStroke();
@@ -165,7 +171,7 @@ export default function BoardView({
     if (!drawing || drawing.points.length === 0) return;
     const stroke = { id: drawing.id, type: "stroke" as const, color, width, points: drawing.points };
     if (!isValidStroke(stroke)) return;
-    onBoardChange({ ...board, items: [...board.items, stroke] });
+    onStrokeAdd(stroke);
   };
 
   const onDoubleClick = (e: React.MouseEvent) => {
@@ -182,13 +188,12 @@ export default function BoardView({
 
   const commitEdit = () => {
     if (!editing) return;
-    const draft = editing.draft;
+    const draft = editing.draft.slice(0, 2000);
     const id = editing.id;
     setEditing(null);
     const current = board.items.find((i) => i.id === id);
     if (current?.type !== "note" || current.text === draft) return;
-    const updated: NoteItem = { ...current, text: draft.slice(0, 2000) };
-    if (isValidNote(updated)) updateNote(id, { text: updated.text });
+    onNoteEdit(id, draft);
   };
 
   return (
