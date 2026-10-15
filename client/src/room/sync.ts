@@ -87,16 +87,15 @@ export function useBoardSync(
   }, [roomId]);
 
   const send = useCallback(
-    (type: string, item: unknown) => {
+    (type: string, item: unknown): Promise<string | null> => {
       const conn = connRef.current;
-      if (!conn || conn.state !== HubConnectionState.Connected) return;
+      if (!conn || conn.state !== HubConnectionState.Connected) return Promise.resolve(null);
       const actionId = crypto.randomUUID();
       seenRef.current.add(actionId);
-      void conn
-        .invoke("SendAction", { boardId: roomId, actionId, type, item })
-        .catch(() => {
-          // Offline-first v1: the action stays local; refresh re-syncs.
-        });
+      // Resolves to the server save timestamp; null when offline or rejected.
+      return conn
+        .invoke<string>("SendAction", { boardId: roomId, actionId, type, item })
+        .catch(() => null);
     },
     [roomId],
   );

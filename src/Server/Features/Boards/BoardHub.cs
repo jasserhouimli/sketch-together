@@ -39,14 +39,15 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
         return new JoinResult(BoardDto.From(row!).Items.GetRawText(), Count(boardId));
     }
 
-    public async Task SendAction(BoardActionEnvelope envelope)
+    /// <summary>Applies one action; returns the save timestamp as the ack.</summary>
+    public async Task<DateTimeOffset> SendAction(BoardActionEnvelope envelope)
     {
         var gate = await Locks.GetOrAdd(envelope.BoardId, _ => new SemaphoreSlim(1, 1))
             .WaitAsync(TimeSpan.FromSeconds(10));
         if (!gate) throw new HubException("Server is busy; retry the action.");
         try
         {
-            await ApplyAsync(envelope);
+            return await ApplyAsync(envelope);
         }
         finally
         {
@@ -54,19 +55,26 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
         }
     }
 
-    private async Task ApplyAsync(BoardActionEnvelope envelope)
+    private async Task<DateTimeOffset> ApplyAsync(BoardActionEnvelope envelope)
     {
         var check = BoardActionValidator.Validate(
             JoinedBoard() ?? throw new HubException("Join a board before sending actions."),
             envelope);
         if (!check.IsSuccess) throw new HubException(check.Error!);
 
+        bool duplicate;
         lock (PresenceLock)
         {
             if (!SeenActions.TryGetValue(envelope.BoardId, out var seen))
                 SeenActions[envelope.BoardId] = seen = [];
-            if (!seen.Add(envelope.ActionId)) return; // redelivery: already applied
-            if (seen.Count > 5000) seen.Clear(); // bounded memory; refresh heals gaps
+            duplicate = !seen.Add(envelope.ActionId);
+            if (!duplicate && seen.Count > 5000) seen.Clear(); // bounded memory; refresh heals gaps
+        }
+        if (duplicate)
+        {
+            // Redelivery: already applied — ack with the current save time.
+            return await db.Boards.Where(b => b.Id == envelope.BoardId)
+                .Select(b => b.UpdatedAt).FirstOrDefaultAsync();
         }
 
         var row = await db.Boards.FindAsync([envelope.BoardId]);
@@ -90,6 +98,7 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
             type = check.Value!.Type,
             item = check.Value.Item,
         });
+        return row.UpdatedAt;
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)

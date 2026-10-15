@@ -94,6 +94,24 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     onJoined: applySnapshot,
   });
 
+  const [pendingSaves, setPendingSaves] = useState(0);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [saveFailed, setSaveFailed] = useState(false);
+
+  const sendTracked = (type: string, item: unknown) => {
+    setPendingSaves((n) => n + 1);
+    void send(type, item).then((at) => {
+      setPendingSaves((n) => Math.max(0, n - 1));
+      // Null means offline or rejected: the edit stays local only.
+      if (at) {
+        setLastSavedAt(at);
+        setSaveFailed(false);
+      } else {
+        setSaveFailed(true);
+      }
+    });
+  };
+
   useEffect(() => {
     let cancelled = false;
     fetchBoard(roomId).then(
@@ -162,7 +180,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         onWidthChange={setWidth}
         onClear={() => {
           setBoard({ ...state.board, items: [] });
-          send("board.clear", {});
+          sendTracked("board.clear", {});
         }}
         extra={
           <>
@@ -170,6 +188,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
               {copied ? "Copied!" : "Copy link"}
             </button>
             <StatusPill status={status} participants={participants} />
+            <SaveState pending={pendingSaves > 0} failed={saveFailed} at={lastSavedAt} />
           </>
         }
       />
@@ -181,12 +200,12 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         onStrokeAdd={(stroke) => {
           if (!isValidStroke(stroke)) return;
           upsertLocal(stroke);
-          send("stroke.add", stroke);
+          sendTracked("stroke.add", stroke);
         }}
         onNoteAdd={(note) => {
           if (!isValidNote(note)) return;
           upsertLocal(note);
-          send("note.add", note);
+          sendTracked("note.add", note);
         }}
         onNoteMove={(id, x, y) =>
           setBoard({
@@ -196,26 +215,25 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         }
         onNoteMoveEnd={(id) => {
           const note = noteById(id);
-          if (note) send("item.move", { id, x: note.x, y: note.y });
+          if (note) sendTracked("item.move", { id, x: note.x, y: note.y });
         }}
         onNoteEdit={(id, text) => {
           const note = noteById(id);
           const updated = note ? { ...note, text: text.slice(0, 2000) } : null;
           if (!updated || !isValidNote(updated)) return;
           upsertLocal(updated);
-          send("note.update", updated);
+          sendTracked("note.update", updated);
         }}
         onDeleteItem={(id) => {
           setBoard({ ...state.board, items: state.board.items.filter((i) => i.id !== id) });
-          send("item.delete", { id });
+          sendTracked("item.delete", { id });
         }}
       />
     </main>
   );
 }
 
-function StatusPill({ status, participants }: { status: SyncStatus; participants: number }) {
-  const label =
+function StatusPill({ status, participants }: { status: SyncStatus; participants: number }) {  const label =
     status === "live"
       ? `Live · ${participants}`
       : status === "connecting"
@@ -231,6 +249,35 @@ function StatusPill({ status, participants }: { status: SyncStatus; participants
     <span className={`status-pill status-${status}`} title={title} role="status">
       <span className="status-dot" aria-hidden />
       {label}
+    </span>
+  );
+}
+
+function SaveState({ pending, failed, at }: { pending: boolean; failed: boolean; at: string | null }) {
+  if (pending) {
+    return (
+      <span className="status-pill" role="status" title="Sending the edit to the server">
+        Saving…
+      </span>
+    );
+  }
+  if (failed) {
+    return (
+      <span className="status-pill status-offline" role="status" title="The edit stayed on this device">
+        Couldn&apos;t save
+      </span>
+    );
+  }
+  if (!at) return null;
+  let time = at;
+  try {
+    time = new Date(at).toLocaleTimeString();
+  } catch {
+    // Keep the raw timestamp.
+  }
+  return (
+    <span className="status-pill" role="status" title={`Board saved on the server at ${at}`}>
+      Saved {time}
     </span>
   );
 }

@@ -18,7 +18,7 @@ board through a room link.
 2. [x] **Editable items** — strokes + notes as items; add/move/edit/delete; eraser.
 3. [x] **Board rooms** — unique board ID, load by ID, copy-link control.
 4. [x] **Live collaboration** — SignalR room per board, validated action broadcast.
-5. [ ] **Save boards** — persist after accepted actions (debounced), reload on open.
+5. [x] **Save boards** — persist after accepted actions (debounced), reload on open.
 6. [ ] **Polish** — responsive, touch, loading/error states, docs, demo.
 
 ## Run it
