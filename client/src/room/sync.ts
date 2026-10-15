@@ -36,10 +36,13 @@ export function useBoardSync(
   const connRef = useRef<HubConnection | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
   const handlersRef = useRef(handlers);
+  // Latest handlers win: remote actions must see current board state.
+  // Assigned during render (the standard use-latest pattern); the connection
+  // effect below reads through this ref so it never needs to rebuild.
+  handlersRef.current = handlers;
 
   useEffect(() => {
     let cancelled = false;
-    handlersRef.current = handlers;
     const connection = new HubConnectionBuilder()
       .withUrl("/hubs/board")
       .withAutomaticReconnect()
@@ -78,7 +81,8 @@ export function useBoardSync(
       connRef.current = null;
       void connection.stop();
     };
-    // Handlers ride handlersRef (latest wins); the connection must not rebuild per render.
+    // The connection reads handlers through handlersRef, so it must not
+    // rebuild when they change identity each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
