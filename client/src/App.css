@@ -126,6 +126,38 @@ body {
   background: #f1f3f5;
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #e0e0e0;
+  background: #f8f9fa;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #868e96;
+}
+
+.status-live .status-dot {
+  background: #2f9e44;
+}
+
+.status-reconnecting .status-dot,
+.status-connecting .status-dot {
+  background: #f08c00;
+}
+
+.status-offline .status-dot {
+  background: #c92a2a;
+}
+
 .board-canvas {
   display: block;
   width: 100%;

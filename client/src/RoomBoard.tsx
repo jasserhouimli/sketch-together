@@ -1,30 +1,104 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import BoardView from "./board/BoardView";
 import Toolbar from "./board/Toolbar";
 import { DEFAULT_COLOR, DEFAULT_WIDTH } from "./board/pen";
 import type { Tool } from "./board/tools";
 import { BoardApiError, fetchBoard } from "./room/api";
 import { roomUrl } from "./room/route";
-import { isValidNote, isValidStroke, type Board, type BoardItem, type NoteItem } from "./board/types";
+import { useBoardSync, type JoinSnapshot, type RemoteAction, type SyncStatus } from "./room/sync";
+import {
+  isValidItem,
+  isValidNote,
+  isValidStroke,
+  type Board,
+  type BoardItem,
+  type NoteItem,
+} from "./board/types";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; board: Board };
 
-/** A shared room: loads items once, then edits locally (live sync is next). */
+/** A shared room: loads once, edits live over SignalR, shows sync status. */
 export default function RoomBoard({ roomId }: { roomId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [tool, setTool] = useState<Tool>("pen");
   const [color, setColor] = useState<string>(DEFAULT_COLOR);
   const [width, setWidth] = useState<number>(DEFAULT_WIDTH);
   const [copied, setCopied] = useState(false);
+  const itemsRef = useRef<BoardItem[]>([]);
+
+  const setBoard = useCallback((board: Board) => {
+    itemsRef.current = board.items;
+    setState({ status: "ready", board });
+  }, []);
+
+  const applyRemote = useCallback(
+    (action: RemoteAction) => {
+      if (state.status !== "ready") return;
+      const board = { ...state.board, items: itemsRef.current };
+      switch (action.type) {
+        case "stroke.add":
+        case "note.add":
+        case "note.update": {
+          if (!isValidItem(action.item)) return;
+          const items = board.items.some((i) => i.id === (action.item as BoardItem).id)
+            ? board.items.map((i) => (i.id === (action.item as BoardItem).id ? (action.item as BoardItem) : i))
+            : [...board.items, action.item as BoardItem];
+          setBoard({ ...board, items });
+          break;
+        }
+        case "item.move": {
+          const move = action.item as { id?: unknown; x?: unknown; y?: unknown };
+          if (typeof move.id !== "string") return;
+          setBoard({
+            ...board,
+            items: board.items.map((i) =>
+              i.id === move.id && i.type === "note" && typeof move.x === "number" && typeof move.y === "number"
+                ? { ...i, x: move.x, y: move.y }
+                : i,
+            ),
+          });
+          break;
+        }
+        case "item.delete": {
+          const id = (action.item as { id?: unknown })?.id;
+          if (typeof id !== "string") return;
+          setBoard({ ...board, items: board.items.filter((i) => i.id !== id) });
+          break;
+        }
+        case "board.clear":
+          setBoard({ ...board, items: [] });
+          break;
+      }
+    },
+    [state, setBoard],
+  );
+
+  const applySnapshot = useCallback(
+    (snapshot: JoinSnapshot) => {
+      try {
+        const parsed: unknown = JSON.parse(snapshot.itemsJson);
+        const items = Array.isArray(parsed) ? parsed.filter(isValidItem) : [];
+        setBoard({ id: roomId, items: items as BoardItem[] });
+      } catch {
+        // Keep the REST-loaded board; the next refresh heals.
+      }
+    },
+    [roomId, setBoard],
+  );
+
+  const { status, participants, send } = useBoardSync(roomId, {
+    onRemoteAction: applyRemote,
+    onJoined: applySnapshot,
+  });
 
   useEffect(() => {
     let cancelled = false;
     fetchBoard(roomId).then(
       (board) => {
-        if (!cancelled) setState({ status: "ready", board });
+        if (!cancelled) setBoard(board);
       },
       (e) => {
         if (!cancelled) {
@@ -38,7 +112,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [roomId]);
+  }, [roomId, setBoard]);
 
   if (state.status === "loading") return <main className="app"><p className="notice">Opening board…</p></main>;
   if (state.status === "error") {
@@ -54,24 +128,6 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     );
   }
 
-  const setBoard = (board: Board) => setState({ status: "ready", board });
-
-  const addItem = (item: BoardItem) =>
-    setState((s) => (s.status === "ready" ? { ...s, board: { ...s.board, items: [...s.board.items, item] } } : s));
-
-  const patchNote = (id: string, patch: Partial<NoteItem>) =>
-    setState((s) =>
-      s.status === "ready"
-        ? {
-            ...s,
-            board: {
-              ...s.board,
-              items: s.board.items.map((i) => (i.id === id && i.type === "note" ? { ...i, ...patch } : i)),
-            },
-          }
-        : s,
-    );
-
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(roomUrl(roomId));
@@ -80,6 +136,19 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     } catch {
       window.prompt("Copy this link:", roomUrl(roomId));
     }
+  };
+
+  const upsertLocal = (item: BoardItem) =>
+    setBoard({
+      ...state.board,
+      items: state.board.items.some((i) => i.id === item.id)
+        ? state.board.items.map((i) => (i.id === item.id ? item : i))
+        : [...state.board.items, item],
+    });
+
+  const noteById = (id: string): NoteItem | undefined => {
+    const found = itemsRef.current.find((i) => i.id === id);
+    return found?.type === "note" ? found : undefined;
   };
 
   return (
@@ -91,11 +160,17 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         onToolChange={setTool}
         onColorChange={setColor}
         onWidthChange={setWidth}
-        onClear={() => setBoard({ ...state.board, items: [] })}
+        onClear={() => {
+          setBoard({ ...state.board, items: [] });
+          send("board.clear", {});
+        }}
         extra={
-          <button type="button" className="clear-btn" onClick={copyLink}>
-            {copied ? "Copied!" : "Copy link"}
-          </button>
+          <>
+            <button type="button" className="clear-btn" onClick={copyLink}>
+              {copied ? "Copied!" : "Copy link"}
+            </button>
+            <StatusPill status={status} participants={participants} />
+          </>
         }
       />
       <BoardView
@@ -104,18 +179,58 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         color={color}
         width={width}
         onStrokeAdd={(stroke) => {
-          if (isValidStroke(stroke)) addItem(stroke);
+          if (!isValidStroke(stroke)) return;
+          upsertLocal(stroke);
+          send("stroke.add", stroke);
         }}
         onNoteAdd={(note) => {
-          if (isValidNote(note)) addItem(note);
+          if (!isValidNote(note)) return;
+          upsertLocal(note);
+          send("note.add", note);
         }}
-        onNoteMove={(id, x, y) => patchNote(id, { x, y })}
-        onNoteMoveEnd={() => {}}
-        onNoteEdit={(id, text) => patchNote(id, { text })}
-        onDeleteItem={(id) =>
-          setBoard({ ...state.board, items: state.board.items.filter((i) => i.id !== id) })
+        onNoteMove={(id, x, y) =>
+          setBoard({
+            ...state.board,
+            items: state.board.items.map((i) => (i.id === id && i.type === "note" ? { ...i, x, y } : i)),
+          })
         }
+        onNoteMoveEnd={(id) => {
+          const note = noteById(id);
+          if (note) send("item.move", { id, x: note.x, y: note.y });
+        }}
+        onNoteEdit={(id, text) => {
+          const note = noteById(id);
+          const updated = note ? { ...note, text: text.slice(0, 2000) } : null;
+          if (!updated || !isValidNote(updated)) return;
+          upsertLocal(updated);
+          send("note.update", updated);
+        }}
+        onDeleteItem={(id) => {
+          setBoard({ ...state.board, items: state.board.items.filter((i) => i.id !== id) });
+          send("item.delete", { id });
+        }}
       />
     </main>
+  );
+}
+
+function StatusPill({ status, participants }: { status: SyncStatus; participants: number }) {
+  const label =
+    status === "live"
+      ? `Live · ${participants}`
+      : status === "connecting"
+        ? "Connecting…"
+        : status === "reconnecting"
+          ? "Reconnecting…"
+          : "Offline";
+  const title =
+    status === "live"
+      ? `${participants} participant${participants === 1 ? "" : "s"} connected`
+      : "Edits stay on this device until the connection returns";
+  return (
+    <span className={`status-pill status-${status}`} title={title} role="status">
+      <span className="status-dot" aria-hidden />
+      {label}
+    </span>
   );
 }

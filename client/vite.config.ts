@@ -8,6 +8,7 @@ export default defineConfig({
     // Local API during development; production serves client + API same-origin.
     proxy: {
       "/api": "http://localhost:5248",
+      "/hubs": { target: "http://localhost:5248", ws: true },
     },
   },
 })
