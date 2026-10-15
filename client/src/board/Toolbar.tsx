@@ -1,7 +1,7 @@
 import { PEN_COLORS, PEN_WIDTHS } from "./pen";
 import type { Tool } from "./tools";
 
-/** Toolbar: tool switch, pen color/width, board clear, plus room extras. */
+/** Toolbar: tool switch, pen color/width, undo/redo, clear, plus room extras. */
 export default function Toolbar({
   tool,
   color,
@@ -10,6 +10,10 @@ export default function Toolbar({
   onColorChange,
   onWidthChange,
   onClear,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   extra,
 }: {
   tool: Tool;
@@ -19,6 +23,10 @@ export default function Toolbar({
   onColorChange: (color: string) => void;
   onWidthChange: (width: number) => void;
   onClear: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   extra?: React.ReactNode;
 }) {
   const toolBtn = (t: Tool, label: string) => (
@@ -77,6 +85,28 @@ export default function Toolbar({
       <button type="button" className="clear-btn" onClick={onClear}>
         Clear
       </button>
+      <div className="toolbar-group" role="group" aria-label="History">
+        <button
+          type="button"
+          className="tool-btn"
+          onClick={onUndo}
+          disabled={!canUndo}
+          title="Undo (Ctrl+Z)"
+          aria-label="Undo"
+        >
+          ↩
+        </button>
+        <button
+          type="button"
+          className="tool-btn"
+          onClick={onRedo}
+          disabled={!canRedo}
+          title="Redo (Ctrl+Y)"
+          aria-label="Redo"
+        >
+          ↪
+        </button>
+      </div>
       {extra}
     </div>
   );

@@ -47,13 +47,13 @@ export default function BoardView({
   onStrokeAdd: (stroke: { id: string; color: string; width: number; points: Point[] }) => void;
   onNoteAdd: (note: { id: string; x: number; y: number; text: string; color: string }) => void;
   onNoteMove: (id: string, x: number, y: number) => void;
-  onNoteMoveEnd: (id: string) => void;
+  onNoteMoveEnd: (id: string, startX: number, startY: number) => void;
   onNoteEdit: (id: string, text: string) => void;
   onDeleteItem: (id: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef<{ id: string; points: Point[] } | null>(null);
-  const moveRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const moveRef = useRef<{ id: string; dx: number; dy: number; startX: number; startY: number } | null>(null);
   const [, setLiveTick] = useState(0);
   const [editing, setEditing] = useState<Editing | null>(null);
 
@@ -109,7 +109,7 @@ export default function BoardView({
       e.currentTarget.setPointerCapture(e.pointerId);
       if (hit && hit.type === "note") {
         // Grab the note: keep the offset so it doesn't jump to the cursor.
-        moveRef.current = { id: hit.id, dx: hit.x - p.x, dy: hit.y - p.y };
+        moveRef.current = { id: hit.id, dx: hit.x - p.x, dy: hit.y - p.y, startX: hit.x, startY: hit.y };
       } else {
         const note = {
           id: newId(),
@@ -161,7 +161,7 @@ export default function BoardView({
     const move = moveRef.current;
     moveRef.current = null;
     if (move) {
-      onNoteMoveEnd(move.id);
+      onNoteMoveEnd(move.id, move.startX, move.startY);
       return;
     }
     finishStroke();
