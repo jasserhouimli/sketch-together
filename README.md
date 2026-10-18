@@ -24,8 +24,10 @@ Notes, presence, and sync state at a glance:
   you draw.
 - **Sticky notes** — click to place, drag to move, double-click to edit.
 - **Rooms via link** — each board gets a short shareable URL. No accounts.
-- **Presence + save state** — participant count, connection status, and a save
-  indicator on every edit.
+- **Presence with names and cursors** — everyone in the room appears in the
+  toolbar with a display name and a colour, and their pointer moves live on the
+  board.
+- **Save state** — connection status and a save indicator on every edit.
 - **Undo / redo** (`Ctrl+Z` / `Ctrl+Y`) — works across the room.
 - **Persistent boards** — refresh or come back later; the board reloads as left.
 
@@ -46,11 +48,20 @@ npm run dev
 
 Click **New board**, copy the link, open it in a second window, and draw.
 
+## Realtime model
+
+Durable actions (strokes, notes, moves, deletes) go through the server: it
+validates, applies, persists, then broadcasts to everyone else. Presence,
+cursors, and drag previews are ephemeral and never stored. See
+[docs/realtime.md](docs/realtime.md).
+
 ## Limits worth knowing
 
-- Note drags broadcast on release, not per frame.
+- Note drags stream a preview while you drag; the committed move is what gets
+  saved.
+- Cursors, names, and drag previews are ephemeral — a restart drops them and
+  everyone rejoins.
 - Offline edits stay on the device; there is no send queue yet.
-- Presence is a participant count — no names or live cursors.
 - Boards are public to anyone with the link; there is no access control.
 
 ## License
