@@ -9,14 +9,14 @@ everything is saved so the board is still there when you come back.
 
 ## Demo
 
-Two windows, one board — a stroke drawn on the left shows up on the right
-without refreshing:
+Two people in the same room — their names sit in the toolbar and their cursor
+moves live on the board:
 
-![Two collaborators drawing on the same board](docs/images/collab.png)
+![Two collaborators on one board, showing the second participant's name and cursor](docs/images/collab.png)
 
-Notes, presence, and sync state at a glance:
+Notes, the participant list, and the save indicator at a glance:
 
-![Sticky notes with participant count and save indicator](docs/images/board.png)
+![Sticky notes with the participant list and the save indicator](docs/images/board.png)
 
 ## Features
 
