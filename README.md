@@ -9,7 +9,7 @@ everything is saved so the board is still there when you come back.
 
 ## Demo
 
-Two people in the same room — their names sit in the toolbar and their cursor
+Two people in the same room — their names sit in the room bar and their cursor
 moves live on the board:
 
 ![Two collaborators on one board, showing the second participant's name and cursor](docs/images/collab.png)
@@ -20,12 +20,12 @@ Notes, the participant list, and the save indicator at a glance:
 
 ## Features
 
-- **Live drawing** — freehand strokes with color and width choices, synced as
-  you draw.
+- **Live drawing** — freehand strokes with color and width choices, from a tool
+  rail that slides out of the way, synced as you draw.
 - **Sticky notes** — click to place, drag to move, double-click to edit.
 - **Rooms via link** — each board gets a short shareable URL. No accounts.
-- **Presence with names and cursors** — everyone in the room appears in the
-  toolbar with a display name and a colour, and their pointer moves live on the
+- **Presence with names and cursors** — everyone in the room appears in the room
+  bar with a display name and a colour, and their pointer moves live on the
   board.
 - **Save state** — connection status and a save indicator on every edit.
 - **Undo / redo** (`Ctrl+Z` / `Ctrl+Y`) — works across the room.
