@@ -9,17 +9,24 @@ namespace SketchTogether.Server.Features.Boards;
 /// One room per board. Clients join, send validated actions, and receive
 /// accepted actions from others. Server order is the order: a per-board lock
 /// serializes load-apply-save-broadcast; actionIds dedupe redeliveries.
-/// Presence is connection counts per room (no names in v1).
+///
+/// Two channels share the connection:
+/// - durable: <see cref="SendAction"/>, validated and persisted, then broadcast;
+/// - ephemeral: cursors and drag previews, relayed to the room and never stored.
+///   Losing one is invisible; the durable action on release is the truth.
 /// </summary>
 public sealed class BoardHub(BoardsDbContext db) : Hub
 {
+    /// <summary>Longest note id we will relay a drag preview for.</summary>
+    private const int MaxRelayedIdLength = 100;
+
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new();
-    private static readonly object PresenceLock = new();
-    private static readonly Dictionary<string, HashSet<string>> Members = new();
+    private static readonly BoardPresence Presence = new();
+    private static readonly object SeenLock = new();
     private static readonly Dictionary<string, HashSet<string>> SeenActions = new();
 
-    /// <summary>Join result: current items plus participant count.</summary>
-    public async Task<JoinResult> JoinBoard(string boardId)
+    /// <summary>Join result: current items, the caller's id, and the room roster.</summary>
+    public async Task<JoinResult> JoinBoard(string boardId, string? displayName)
     {
         if (!BoardIds.IsValid(boardId))
             throw new HubException("Board id must be 12 lowercase letters/digits.");
@@ -27,16 +34,12 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
             throw new HubException("No board with that link.");
 
         await Groups.AddToGroupAsync(Context.ConnectionId, Room(boardId));
-        lock (PresenceLock)
-        {
-            if (!Members.TryGetValue(boardId, out var set))
-                Members[boardId] = set = [];
-            set.Add(Context.ConnectionId);
-        }
-        await Clients.Group(Room(boardId)).SendAsync("PresenceChanged", Count(boardId));
+        Presence.Join(boardId, Context.ConnectionId, displayName);
+        await BroadcastRosterAsync(boardId);
 
         var row = await db.Boards.FindAsync([boardId]);
-        return new JoinResult(BoardDto.From(row!).Items.GetRawText(), Count(boardId));
+        return new JoinResult(
+            BoardDto.From(row!).Items.GetRawText(), Context.ConnectionId, RosterDto(boardId));
     }
 
     /// <summary>Applies one action; returns the save timestamp as the ack.</summary>
@@ -55,15 +58,56 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
         }
     }
 
+    /// <summary>
+    /// Relays the caller's cursor to the rest of the room. Ephemeral: a dropped
+    /// frame is invisible, so out-of-range input is ignored rather than thrown.
+    /// </summary>
+    public async Task UpdateCursor(double x, double y)
+    {
+        if (!TryMembership(out var membership)) return;
+        if (!BoardValues.IsUnit(x) || !BoardValues.IsUnit(y)) return;
+
+        var who = membership.Participant;
+        await Clients.OthersInGroup(Room(membership.BoardId)).SendAsync("CursorMoved", new
+        {
+            id = who.ConnectionId,
+            name = who.Name,
+            color = who.Color,
+            x,
+            y,
+        });
+    }
+
+    /// <summary>
+    /// Relays an in-progress note drag. Ephemeral on purpose: intermediate
+    /// positions are not worth persisting, so a crash mid-drag leaves the note
+    /// where it was and the release sends the one durable item.move.
+    /// </summary>
+    public async Task DragPreview(string noteId, double x, double y)
+    {
+        if (!TryMembership(out var membership)) return;
+        if (string.IsNullOrEmpty(noteId) || noteId.Length > MaxRelayedIdLength) return;
+        if (!BoardValues.IsUnit(x) || !BoardValues.IsUnit(y)) return;
+
+        await Clients.OthersInGroup(Room(membership.BoardId)).SendAsync("DragPreviewMoved", new
+        {
+            id = membership.Participant.ConnectionId,
+            noteId,
+            x,
+            y,
+        });
+    }
+
     private async Task<DateTimeOffset> ApplyAsync(BoardActionEnvelope envelope)
     {
         var check = BoardActionValidator.Validate(
-            JoinedBoard() ?? throw new HubException("Join a board before sending actions."),
+            Presence.Find(Context.ConnectionId)?.BoardId
+                ?? throw new HubException("Join a board before sending actions."),
             envelope);
         if (!check.IsSuccess) throw new HubException(check.Error!);
 
         bool duplicate;
-        lock (PresenceLock)
+        lock (SeenLock)
         {
             if (!SeenActions.TryGetValue(envelope.BoardId, out var seen))
                 SeenActions[envelope.BoardId] = seen = [];
@@ -103,44 +147,27 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        string? boardId = null;
-        lock (PresenceLock)
-        {
-            foreach (var (room, members) in Members)
-            {
-                if (members.Remove(Context.ConnectionId))
-                {
-                    boardId = room;
-                    break;
-                }
-            }
-        }
-        if (boardId is not null)
-            await Clients.Group(Room(boardId)).SendAsync("PresenceChanged", Count(boardId));
+        var boardId = Presence.Leave(Context.ConnectionId);
+        if (boardId is not null) await BroadcastRosterAsync(boardId);
         await base.OnDisconnectedAsync(exception);
     }
 
-    private string? JoinedBoard()
+    private bool TryMembership(out Membership membership)
     {
-        lock (PresenceLock)
-        {
-            foreach (var (room, members) in Members)
-            {
-                if (members.Contains(Context.ConnectionId)) return room;
-            }
-            return null;
-        }
+        var found = Presence.Find(Context.ConnectionId);
+        membership = found!;
+        return found is not null;
     }
 
-    private static int Count(string boardId)
-    {
-        lock (PresenceLock)
-        {
-            return Members.TryGetValue(boardId, out var set) ? set.Count : 0;
-        }
-    }
+    private Task BroadcastRosterAsync(string boardId) =>
+        Clients.Group(Room(boardId)).SendAsync("PresenceChanged", RosterDto(boardId));
+
+    private static object[] RosterDto(string boardId) =>
+        Presence.Roster(boardId)
+            .Select(p => new { id = p.ConnectionId, name = p.Name, color = p.Color })
+            .ToArray();
 
     private static string Room(string boardId) => $"board:{boardId}";
 
-    public sealed record JoinResult(string ItemsJson, int ParticipantCount);
+    public sealed record JoinResult(string ItemsJson, string SelfId, object[] Participants);
 }
