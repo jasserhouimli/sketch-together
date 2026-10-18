@@ -64,6 +64,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
   const [color, setColor] = useState<string>(DEFAULT_COLOR);
   const [width, setWidth] = useState<number>(DEFAULT_WIDTH);
   const [copied, setCopied] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(true);
   const [histState, setHistState] = useState({ undo: false, redo: false });
   // Names are cosmetic and per tab; the server sanitizes whatever we send.
   const [displayName] = useState(() => resolveDisplayName(sessionStore()));
@@ -371,11 +372,13 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
   }
 
   return (
-    <main className="app">
+    <main className={`app${toolsOpen ? " tools-open" : ""}`}>
       <Toolbar
         tool={tool}
         color={color}
         width={width}
+        open={toolsOpen}
+        onToggle={() => setToolsOpen((open) => !open)}
         onToolChange={setTool}
         onColorChange={setColor}
         onWidthChange={setWidth}
@@ -388,17 +391,15 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         onRedo={doRedo}
         canUndo={histState.undo}
         canRedo={histState.redo}
-        extra={
-          <>
-            <PeerChips peers={peers} selfId={selfId} />
-            <button type="button" className="clear-btn" onClick={copyLink}>
-              {copied ? "Copied!" : "Copy link"}
-            </button>
-            <StatusPill status={status} participants={participants} />
-            <SaveState pending={pendingSaves > 0} failed={saveFailed} at={lastSavedAt} />
-          </>
-        }
       />
+      <div className="room-info">
+        <PeerChips peers={peers} selfId={selfId} />
+        <button type="button" className="clear-btn" onClick={copyLink}>
+          {copied ? "Copied!" : "Copy link"}
+        </button>
+        <StatusPill status={status} participants={participants} />
+        <SaveState pending={pendingSaves > 0} failed={saveFailed} at={lastSavedAt} />
+      </div>
       <BoardView
         board={state.board}
         tool={tool}
@@ -494,8 +495,10 @@ function PeerChips({ peers, selfId }: { peers: Peer[]; selfId: string | null }) 
             title={you ? `${peer.name} (you)` : peer.name}
           >
             <span className="peer-dot" style={{ backgroundColor: peer.color }} aria-hidden />
-            {peer.name}
-            {you ? " (you)" : ""}
+            <span className="peer-name">
+              {peer.name}
+              {you ? " (you)" : ""}
+            </span>
           </span>
         );
       })}

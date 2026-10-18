@@ -29,12 +29,35 @@ function Home() {
 
   return (
     <main className="home">
-      <h1>SketchTogether</h1>
-      <p>Draw and take notes together, live, through a shareable link.</p>
-      <button type="button" className="create-btn" onClick={create} disabled={creating}>
-        {creating ? "Creating…" : "New board"}
-      </button>
-      {error && <p className="error">{error}. Is the server running?</p>}
+      <section className="home-card">
+        <svg className="home-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="0" y="0" width="32" height="32" rx="15" fill="#1971c2" />
+          <path
+            d="M7 21.5c3.5-8.5 7.5-11.5 11-10s-1 6.5-6.5 9"
+            fill="none"
+            stroke="#ffffff"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+          />
+        </svg>
+        <h1>SketchTogether</h1>
+        <p className="home-lede">
+          Draw and take notes together, live, through a shareable link.
+        </p>
+        <button type="button" className="create-btn" onClick={create} disabled={creating}>
+          {creating ? "Creating…" : "New board"}
+        </button>
+        <ul className="home-points">
+          <li>Live cursors</li>
+          <li>Sticky notes</li>
+          <li>Saved automatically</li>
+        </ul>
+      </section>
+      {error && (
+        <p className="error" role="alert">
+          {error}. Is the server running?
+        </p>
+      )}
     </main>
   );
 }

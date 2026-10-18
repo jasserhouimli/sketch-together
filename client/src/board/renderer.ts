@@ -85,23 +85,30 @@ function renderNote(
   const pos = toPixels({ x: note.x, y: note.y }, width, height);
   ctx.save();
   // A ghost is a peer's in-flight drag: dashed outline so it reads as a
-  // preview rather than the committed position.
+  // preview rather than the committed position. Only settled notes get depth.
   if (ghost) {
     ctx.globalAlpha = 0.85;
     ctx.setLineDash([6, 4]);
+  } else {
+    ctx.shadowColor = "rgba(16, 24, 40, 0.16)";
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 2;
   }
   ctx.fillStyle = note.color;
-  ctx.strokeStyle = ghost ? "#495057" : "rgba(0,0,0,0.25)";
+  ctx.strokeStyle = ghost ? "#495057" : "rgba(16, 24, 40, 0.16)";
   ctx.lineWidth = ghost ? 2 : 1;
   ctx.beginPath();
-  ctx.roundRect(pos.x, pos.y, NOTE_WIDTH, NOTE_HEIGHT, 6);
+  ctx.roundRect(pos.x, pos.y, NOTE_WIDTH, NOTE_HEIGHT, 10);
   ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
   ctx.stroke();
   ctx.setLineDash([]);
-  ctx.fillStyle = "#333333";
-  ctx.font = "14px system-ui, sans-serif";
+  ctx.fillStyle = "#3b3b32";
+  ctx.font = "13.5px system-ui, sans-serif";
   ctx.textBaseline = "top";
-  wrapText(ctx, note.text, pos.x + 10, pos.y + 10, NOTE_WIDTH - 20, 18);
+  wrapText(ctx, note.text, pos.x + 12, pos.y + 12, NOTE_WIDTH - 24, 18);
   ctx.restore();
 }
 
@@ -118,6 +125,9 @@ function renderCursor(
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 1.5;
   ctx.lineJoin = "round";
+  ctx.shadowColor = "rgba(16, 24, 40, 0.18)";
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 1;
   ctx.beginPath();
   ctx.moveTo(pos.x, pos.y);
   ctx.lineTo(pos.x, pos.y + 16);
@@ -138,6 +148,9 @@ function renderCursor(
   ctx.roundRect(pillX, pillY, pillWidth, pillHeight, 9);
   ctx.fillStyle = cursor.color;
   ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
   ctx.fillStyle = "#ffffff";
   ctx.textBaseline = "middle";
   ctx.fillText(label, pillX + padX, pillY + pillHeight / 2 + 0.5, pillWidth - padX * 2);

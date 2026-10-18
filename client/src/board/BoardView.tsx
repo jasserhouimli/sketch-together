@@ -317,8 +317,8 @@ export default function BoardView({
       />
       {showEmptyHint && (
         <div className="empty-hint" aria-hidden>
-          <p>Pick the pen and draw — or add a note.</p>
-          <p>Share the link above to collaborate.</p>
+          <p>Pick the pen and draw — or drop a note.</p>
+          <p>Share the link to draw together.</p>
         </div>
       )}
       {editing && (
