@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toPixels, toRelative } from "./geometry";
 import { findItemAt, findNoteAt } from "./hitTest";
-import { renderBoard, renderItem } from "./renderer";
+import { renderBoard, renderItem, type CursorView } from "./renderer";
 import type { Tool } from "./tools";
 import {
   isValidNote,
@@ -14,6 +14,8 @@ import {
 export const DEFAULT_NOTE_COLOR = "#fff2a8";
 export const DEFAULT_NOTE_TEXT = "New note";
 
+const NO_CURSORS: readonly CursorView[] = [];
+
 interface Editing {
   id: string;
   draft: string;
@@ -24,13 +26,17 @@ interface Editing {
 /**
  * Canvas board: pen draws, eraser deletes, note tool adds/moves/edits notes.
  * Every mutation goes through a callback so the parent can persist and
- * broadcast it; the board prop stays the single source of truth.
+ * broadcast it; the board prop stays the single source of truth. Remote
+ * cursors and in-flight note previews are drawn on top as ephemeral layers.
  */
 export default function BoardView({
   board,
   tool,
   color,
   width,
+  cursors = NO_CURSORS,
+  notePreviews,
+  onPointerMovePos,
   onStrokeAdd,
   onNoteAdd,
   onNoteMove,
@@ -43,6 +49,9 @@ export default function BoardView({
   tool: Tool;
   color: string;
   width: number;
+  cursors?: readonly CursorView[];
+  notePreviews?: ReadonlyMap<string, Point>;
+  onPointerMovePos?: (point: Point) => void;
   showEmptyHint: boolean;
   onStrokeAdd: (stroke: { id: string; color: string; width: number; points: Point[] }) => void;
   onNoteAdd: (note: { id: string; x: number; y: number; text: string; color: string }) => void;
@@ -54,10 +63,28 @@ export default function BoardView({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef<{ id: string; points: Point[] } | null>(null);
   const moveRef = useRef<{ id: string; dx: number; dy: number; startX: number; startY: number } | null>(null);
-  const [, setLiveTick] = useState(0);
   const [editing, setEditing] = useState<Editing | null>(null);
 
-  // Redraw committed items whenever the board changes.
+  const redraw = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const cssWidth = canvas.width / dpr;
+    const cssHeight = canvas.height / dpr;
+    renderBoard(ctx, board, cssWidth, cssHeight, { notePreviews, cursors });
+    const live = drawingRef.current?.points ?? null;
+    if (live && live.length > 0) {
+      renderItem(ctx, { id: "live", type: "stroke", color, width, points: live }, cssWidth, cssHeight);
+    }
+  }, [board, color, width, notePreviews, cursors]);
+
+  // Latest redraw wins: the resize observer must always paint current state.
+  const redrawRef = useRef(redraw);
+
+  // Size the backing store once and on element resizes.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -66,14 +93,19 @@ export default function BoardView({
       const dpr = window.devicePixelRatio || 1;
       canvas.width = Math.max(1, Math.round(rect.width * dpr));
       canvas.height = Math.max(1, Math.round(rect.height * dpr));
-      draw(canvas, board, drawingRef.current?.points ?? null, color, width);
+      redrawRef.current();
     };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
     return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board]);
+  }, []);
+
+  // Repaint whenever the board, cursors, or previews change.
+  useEffect(() => {
+    redrawRef.current = redraw;
+    redraw();
+  }, [redraw]);
 
   const eventPoint = (e: React.PointerEvent): Point | null => {
     const canvas = canvasRef.current;
@@ -83,12 +115,10 @@ export default function BoardView({
     return toRelative(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
   };
 
-  const eraseAt = (e: React.PointerEvent) => {
+  const eraseAt = (p: Point) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const p = eventPoint(e);
-    if (!p) return;
     const hit = findItemAt(board.items, p, rect.width, rect.height);
     if (hit) onDeleteItem(hit.id);
   };
@@ -97,7 +127,8 @@ export default function BoardView({
     if (e.pointerType === "mouse" && e.button !== 0) return;
     if (tool === "eraser") {
       e.currentTarget.setPointerCapture(e.pointerId);
-      eraseAt(e);
+      const p = eventPoint(e);
+      if (p) eraseAt(p);
       return;
     }
     if (tool === "note") {
@@ -128,33 +159,31 @@ export default function BoardView({
     if (!p) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     drawingRef.current = { id: newId(), points: [p] };
-    setLiveTick((t) => t + 1);
+    redrawRef.current();
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    const p = eventPoint(e);
+    if (p) onPointerMovePos?.(p);
     if (tool === "eraser") {
       if (e.buttons === 0) return;
-      eraseAt(e);
+      if (p) eraseAt(p);
       return;
     }
     const move = moveRef.current;
     if (move) {
-      const p = eventPoint(e);
       if (!p) return;
       const clamp = (v: number) => Math.min(1, Math.max(0, v));
       onNoteMove(move.id, clamp(p.x + move.dx), clamp(p.y + move.dy));
       return;
     }
     const drawing = drawingRef.current;
-    if (!drawing) return;
-    const p = eventPoint(e);
-    if (!p) return;
+    if (!drawing || !p) return;
     const last = drawing.points[drawing.points.length - 1];
     // Drop duplicate samples to keep stroke payloads small.
     if (last.x === p.x && last.y === p.y) return;
     drawing.points.push(p);
-    const canvas = canvasRef.current;
-    if (canvas) draw(canvas, board, drawing.points, color, width);
+    redrawRef.current();
   };
 
   const onPointerUp = () => {
@@ -234,28 +263,4 @@ export default function BoardView({
       )}
     </div>
   );
-}
-
-function draw(
-  canvas: HTMLCanvasElement,
-  board: Board,
-  live: Point[] | null,
-  color: string,
-  width: number,
-): void {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const dpr = window.devicePixelRatio || 1;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const cssWidth = canvas.width / dpr;
-  const cssHeight = canvas.height / dpr;
-  renderBoard(ctx, board, cssWidth, cssHeight);
-  if (live && live.length > 0) {
-    renderItem(
-      ctx,
-      { id: "live", type: "stroke", color, width, points: live },
-      cssWidth,
-      cssHeight,
-    );
-  }
 }

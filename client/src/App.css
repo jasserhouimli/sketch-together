@@ -183,6 +183,39 @@ body {
   background: #c92a2a;
 }
 
+.peer-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.peer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid #e0e0e0;
+  background: #fff;
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.peer-chip-self {
+  color: #6c757d;
+}
+
+.peer-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
 .board-canvas {
   display: block;
   width: 100%;

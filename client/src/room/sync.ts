@@ -4,6 +4,7 @@ import {
   HubConnectionState,
   type HubConnection,
 } from "@microsoft/signalr";
+import { toRoster, type Peer } from "./presence";
 
 export type SyncStatus = "connecting" | "live" | "reconnecting" | "offline";
 
@@ -15,31 +16,41 @@ export interface RemoteAction {
 
 export interface JoinSnapshot {
   itemsJson: string;
-  participantCount: number;
+  selfId?: string;
+  participants?: unknown;
 }
 
 /**
  * One SignalR connection per room. Sends local actions, applies accepted
- * remote actions through `onRemoteAction`, and tracks presence. Seen action
- * IDs suppress our own echoes and redeliveries; the set is bounded and a
- * refresh re-syncs full state anyway.
+ * remote actions through `onRemoteAction`, and tracks the participant roster.
+ * Seen action IDs suppress our own echoes and redeliveries; the set is bounded
+ * and a refresh re-syncs full state anyway.
+ *
+ * Cursors and drag previews ride the same connection but are ephemeral: they
+ * are fire-and-forget and never a source of truth.
  */
 export function useBoardSync(
   roomId: string,
+  displayName: string,
   handlers: {
     onRemoteAction: (action: RemoteAction) => void;
     onJoined: (snapshot: JoinSnapshot) => void;
+    onCursor: (cursor: unknown) => void;
+    onPreview: (preview: unknown) => void;
   },
 ) {
   const [status, setStatus] = useState<SyncStatus>("connecting");
-  const [participants, setParticipants] = useState(1);
+  const [peers, setPeers] = useState<Peer[]>([]);
+  const [selfId, setSelfId] = useState<string | null>(null);
   const connRef = useRef<HubConnection | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
   const handlersRef = useRef(handlers);
+  const nameRef = useRef(displayName);
   // Latest handlers win: remote actions must see current board state.
   // Assigned during render (the standard use-latest pattern); the connection
   // effect below reads through this ref so it never needs to rebuild.
   handlersRef.current = handlers;
+  nameRef.current = displayName;
 
   useEffect(() => {
     let cancelled = false;
@@ -49,6 +60,20 @@ export function useBoardSync(
       .build();
     connRef.current = connection;
 
+    // Rejoining also re-reads the board: the server assigns a new connection
+    // id on reconnect, so both group membership and the roster must be rebuilt.
+    const join = async () => {
+      const snapshot = await connection.invoke<JoinSnapshot>(
+        "JoinBoard",
+        roomId,
+        nameRef.current,
+      );
+      if (cancelled) return;
+      setSelfId(typeof snapshot.selfId === "string" ? snapshot.selfId : null);
+      setPeers(toRoster(snapshot.participants));
+      handlersRef.current.onJoined(snapshot);
+    };
+
     connection.on("ReceiveAction", (action: RemoteAction) => {
       if (!action || typeof action.actionId !== "string") return;
       if (seenRef.current.has(action.actionId)) return;
@@ -56,21 +81,31 @@ export function useBoardSync(
       if (seenRef.current.size > 2000) seenRef.current.clear();
       handlersRef.current.onRemoteAction(action);
     });
-    connection.on("PresenceChanged", (count: unknown) => {
-      if (typeof count === "number") setParticipants(count);
+    connection.on("PresenceChanged", (roster: unknown) => {
+      setPeers(toRoster(roster));
+    });
+    connection.on("CursorMoved", (cursor: unknown) => {
+      handlersRef.current.onCursor(cursor);
+    });
+    connection.on("DragPreviewMoved", (preview: unknown) => {
+      handlersRef.current.onPreview(preview);
     });
     connection.onreconnecting(() => setStatus("reconnecting"));
-    connection.onreconnected(() => setStatus("live"));
-    connection.onclose(() => setStatus("offline"));
+    connection.onreconnected(() => {
+      setStatus("live");
+      void join().catch(() => {});
+    });
+    connection.onclose(() => {
+      setStatus("offline");
+      setPeers([]);
+      setSelfId(null);
+    });
 
     connection
       .start()
-      .then(() => connection.invoke<JoinSnapshot>("JoinBoard", roomId))
-      .then((snapshot) => {
-        if (cancelled) return;
-        setStatus("live");
-        setParticipants(snapshot.participantCount);
-        handlersRef.current.onJoined(snapshot);
+      .then(join)
+      .then(() => {
+        if (!cancelled) setStatus("live");
       })
       .catch(() => {
         if (!cancelled) setStatus("offline");
@@ -100,5 +135,19 @@ export function useBoardSync(
     [roomId],
   );
 
-  return { status, participants, send };
+  // Ephemeral sends are dropped when the connection is down: the next pointer
+  // move re-sends, so there is nothing to queue.
+  const sendCursor = useCallback((x: number, y: number) => {
+    const conn = connRef.current;
+    if (!conn || conn.state !== HubConnectionState.Connected) return;
+    void conn.invoke("UpdateCursor", x, y).catch(() => {});
+  }, []);
+
+  const sendDragPreview = useCallback((noteId: string, x: number, y: number) => {
+    const conn = connRef.current;
+    if (!conn || conn.state !== HubConnectionState.Connected) return;
+    void conn.invoke("DragPreview", noteId, x, y).catch(() => {});
+  }, []);
+
+  return { status, peers, selfId, send, sendCursor, sendDragPreview };
 }

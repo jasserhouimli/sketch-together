@@ -1,11 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BoardView from "./board/BoardView";
 import Toolbar from "./board/Toolbar";
 import { DEFAULT_COLOR, DEFAULT_WIDTH } from "./board/pen";
 import type { Tool } from "./board/tools";
+import type { Point } from "./board/types";
 import { BoardApiError, fetchBoard } from "./room/api";
 import { roomUrl } from "./room/route";
 import { EditHistory } from "./board/history";
+import { resolveDisplayName, type Peer } from "./room/presence";
+import { createThrottle } from "./room/throttle";
+import {
+  dropPreview,
+  isCursorUpdate,
+  isPreviewUpdate,
+  keepPreviewsFrom,
+  pruneCursors,
+  prunePreviews,
+  toCursor,
+  toPreview,
+  upsertCursor,
+  upsertPreview,
+  type DragPreview,
+  type RemoteCursor,
+} from "./room/transient";
 import { useBoardSync, type JoinSnapshot, type RemoteAction, type SyncStatus } from "./room/sync";
 import {
   isValidItem,
@@ -16,10 +33,29 @@ import {
   type NoteItem,
 } from "./board/types";
 
+/** Cursor updates are cheap but frequent; ~25/s looks smooth to a peer. */
+const CURSOR_SEND_MS = 40;
+/** Drag previews can be coarser: the release sends the exact position. */
+const PREVIEW_SEND_MS = 60;
+/** How often expired cursors/previews are swept out of state. */
+const PRUNE_INTERVAL_MS = 500;
+
+const NO_CURSORS: ReadonlyMap<string, RemoteCursor> = new Map();
+const NO_PREVIEWS: ReadonlyMap<string, DragPreview> = new Map();
+
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; board: Board };
+
+/** Session storage can be unavailable (sandboxed frames, private mode). */
+function sessionStore(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 /** A shared room: loads once, edits live over SignalR, shows sync status. */
 export default function RoomBoard({ roomId }: { roomId: string }) {
@@ -29,6 +65,10 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
   const [width, setWidth] = useState<number>(DEFAULT_WIDTH);
   const [copied, setCopied] = useState(false);
   const [histState, setHistState] = useState({ undo: false, redo: false });
+  // Names are cosmetic and per tab; the server sanitizes whatever we send.
+  const [displayName] = useState(() => resolveDisplayName(sessionStore()));
+  const [cursors, setCursors] = useState(NO_CURSORS);
+  const [previews, setPreviews] = useState(NO_PREVIEWS);
   const itemsRef = useRef<BoardItem[]>([]);
   const editsRef = useRef<EditHistory | null>(null);
 
@@ -71,9 +111,12 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         case "item.move": {
           const move = action.item as { id?: unknown; x?: unknown; y?: unknown };
           if (typeof move.id !== "string") return;
+          const id = move.id;
+          // The committed position arrives: drop the in-flight preview.
+          setPreviews((prev) => dropPreview(prev, id));
           setItems(
             items.map((i) =>
-              i.id === move.id && i.type === "note" && typeof move.x === "number" && typeof move.y === "number"
+              i.id === id && i.type === "note" && typeof move.x === "number" && typeof move.y === "number"
                 ? { ...i, x: move.x, y: move.y }
                 : i,
             ),
@@ -111,10 +154,75 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     [setItems],
   );
 
-  const { status, participants, send } = useBoardSync(roomId, {
-    onRemoteAction: applyRemote,
-    onJoined: applySnapshot,
-  });
+  const onCursor = useCallback((raw: unknown) => {
+    if (!isCursorUpdate(raw)) return;
+    const now = Date.now();
+    setCursors((prev) => upsertCursor(prev, toCursor(raw, now)));
+  }, []);
+
+  const onPreview = useCallback((raw: unknown) => {
+    if (!isPreviewUpdate(raw)) return;
+    const now = Date.now();
+    setPreviews((prev) => upsertPreview(prev, toPreview(raw, now)));
+  }, []);
+
+  const { status, peers, selfId, send, sendCursor, sendDragPreview } = useBoardSync(
+    roomId,
+    displayName,
+    {
+      onRemoteAction: applyRemote,
+      onJoined: applySnapshot,
+      onCursor,
+      onPreview,
+    },
+  );
+
+  const participants = peers.length;
+
+  // A peer that left takes its in-flight previews with it.
+  useEffect(() => {
+    setPreviews((prev) => keepPreviewsFrom(prev, peers));
+  }, [peers]);
+
+  // Sweep expired cursors and previews. Unchanged maps keep their identity, so
+  // a quiet room does not re-render every tick.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setCursors((prev) => pruneCursors(prev, now));
+      setPreviews((prev) => prunePreviews(prev, now));
+    }, PRUNE_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, []);
+
+  const cursorThrottle = useMemo(
+    () => createThrottle((p: Point) => sendCursor(p.x, p.y), CURSOR_SEND_MS),
+    [sendCursor],
+  );
+  const previewThrottle = useMemo(
+    () =>
+      createThrottle(
+        (p: { noteId: string; x: number; y: number }) => sendDragPreview(p.noteId, p.x, p.y),
+        PREVIEW_SEND_MS,
+      ),
+    [sendDragPreview],
+  );
+  useEffect(
+    () => () => {
+      cursorThrottle.cancel();
+      previewThrottle.cancel();
+    },
+    [cursorThrottle, previewThrottle],
+  );
+
+  const cursorViews = useMemo(
+    () => [...cursors.values()].map((c) => ({ id: c.id, name: c.name, color: c.color, point: c.point })),
+    [cursors],
+  );
+  const previewPositions = useMemo(
+    () => new Map([...previews.values()].map((p) => [p.noteId, p.point] as const)),
+    [previews],
+  );
 
   const [pendingSaves, setPendingSaves] = useState(0);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
@@ -282,6 +390,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         canRedo={histState.redo}
         extra={
           <>
+            <PeerChips peers={peers} selfId={selfId} />
             <button type="button" className="clear-btn" onClick={copyLink}>
               {copied ? "Copied!" : "Copy link"}
             </button>
@@ -295,6 +404,9 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         tool={tool}
         color={color}
         width={width}
+        cursors={cursorViews}
+        notePreviews={previewPositions}
+        onPointerMovePos={(p) => cursorThrottle(p)}
         showEmptyHint={state.board.items.length === 0}
         onStrokeAdd={(stroke) => {
           if (!isValidStroke(stroke)) return;
@@ -316,12 +428,14 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
           upsertLocal(note);
           sendTracked("note.add", note);
         }}
-        onNoteMove={(id, x, y) =>
+        onNoteMove={(id, x, y) => {
           setItems(
             itemsRef.current.map((i) => (i.id === id && i.type === "note" ? { ...i, x, y } : i)),
-          )
-        }
+          );
+          previewThrottle({ noteId: id, x, y });
+        }}
         onNoteMoveEnd={(id, startX, startY) => {
+          previewThrottle.cancel();
           const note = noteById(id);
           if (!note) return;
           edits().record({
@@ -360,6 +474,33 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         }}
       />
     </main>
+  );
+}
+
+/** Who is here, with the same colors their cursors use. */
+function PeerChips({ peers, selfId }: { peers: Peer[]; selfId: string | null }) {
+  if (peers.length <= 1) return null;
+  const shown = peers.slice(0, 4);
+  const hidden = peers.length - shown.length;
+  return (
+    <span className="peer-chips" role="list" aria-label="People in this room">
+      {shown.map((peer) => {
+        const you = peer.id === selfId;
+        return (
+          <span
+            key={peer.id}
+            role="listitem"
+            className={`peer-chip${you ? " peer-chip-self" : ""}`}
+            title={you ? `${peer.name} (you)` : peer.name}
+          >
+            <span className="peer-dot" style={{ backgroundColor: peer.color }} aria-hidden />
+            {peer.name}
+            {you ? " (you)" : ""}
+          </span>
+        );
+      })}
+      {hidden > 0 && <span className="peer-chip">+{hidden}</span>}
+    </span>
   );
 }
 
