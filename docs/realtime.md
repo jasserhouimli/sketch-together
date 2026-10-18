@@ -27,6 +27,26 @@ trailing call (40 ms for cursors, 60 ms for previews). Out-of-range coordinates
 are dropped rather than rejected — a lost frame is invisible, and a drag ends
 with the durable `item.move`.
 
+### Smoothing on the receiving side
+
+Throttled updates arrive as steps, so the client does not paint each one where
+it lands. Every incoming position becomes a *target*, and the drawn position
+chases it exponentially (`room/smoothing.ts`), once per animation frame:
+
+- Exponential approach, so the result is frame-rate independent: one 32 ms step
+  lands where two 16 ms steps do, and it never overshoots.
+- A target far from the previous one is treated as a jump, not motion — the
+  pointer was warped, or a window changed — and snaps instead of gliding.
+- Nothing is drawn when everything has arrived, so an idle board costs no
+  frames.
+
+Interpolation adds a fixed, bounded lag (the time constant, 55 ms) on top of the
+network delay. Extrapolation would remove that lag but needs a velocity
+estimate from 40 ms samples and overshoots on direction changes; a cursor that
+occasionally shoots past its owner is worse than one that trails slightly. Only
+remote layers are smoothed: the local player's own stroke and dragged note still
+follow the pointer exactly.
+
 ## Presence
 
 `JoinBoard(boardId, displayName)` registers the connection in an in-memory
@@ -46,6 +66,8 @@ still just network input.
 - `room/sync.ts` — connection, roster, sends; state of the durable channel.
 - `room/transient.ts` — cursor and preview state with TTLs (5 s, 3 s), so a
   peer that disappears mid-gesture leaves nothing behind.
+- `room/smoothing.ts` — turns each arriving position into a target and moves the
+  drawn one toward it on animation frames.
 - `board/renderer.ts` — draws previewed notes as dashed ghosts and cursors last,
   on top of everything else.
 

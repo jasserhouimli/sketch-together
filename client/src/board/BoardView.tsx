@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toPixels, toRelative } from "./geometry";
 import { findItemAt, findNoteAt } from "./hitTest";
 import { renderBoard, renderItem, type CursorView } from "./renderer";
+import { renderedPositions, stepFollow, type FollowState } from "../room/smoothing";
 import type { Tool } from "./tools";
 import {
   isValidNote,
@@ -65,6 +66,34 @@ export default function BoardView({
   const moveRef = useRef<{ id: string; dx: number; dy: number; startX: number; startY: number } | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
 
+  // Ephemeral layers are animated rather than painted at each network update.
+  const layersRef = useRef<{ cursors: readonly CursorView[]; previews: ReadonlyMap<string, Point> | undefined }>({
+    cursors,
+    previews: notePreviews,
+  });
+  const cursorFollowRef = useRef(new Map<string, FollowState>());
+  const previewFollowRef = useRef(new Map<string, FollowState>());
+  const rafRef = useRef<number | null>(null);
+  const lastFrameRef = useRef(0);
+
+  // Remote positions interpolate in; the local player's own drawing never does.
+  const smoothCursors = useCallback((): readonly CursorView[] => {
+    const positions = renderedPositions(cursorFollowRef.current);
+    return layersRef.current.cursors.map((cursor) => {
+      const point = positions.get(cursor.id);
+      return point ? { ...cursor, point } : cursor;
+    });
+  }, []);
+
+  const smoothPreviews = useCallback((): ReadonlyMap<string, Point> | undefined => {
+    const previews = layersRef.current.previews;
+    if (!previews) return undefined;
+    const positions = renderedPositions(previewFollowRef.current);
+    const smoothed = new Map<string, Point>();
+    for (const [id, fallback] of previews) smoothed.set(id, positions.get(id) ?? fallback);
+    return smoothed;
+  }, []);
+
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -74,15 +103,60 @@ export default function BoardView({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cssWidth = canvas.width / dpr;
     const cssHeight = canvas.height / dpr;
-    renderBoard(ctx, board, cssWidth, cssHeight, { notePreviews, cursors });
+    renderBoard(ctx, board, cssWidth, cssHeight, {
+      notePreviews: smoothPreviews(),
+      cursors: smoothCursors(),
+    });
     const live = drawingRef.current?.points ?? null;
     if (live && live.length > 0) {
       renderItem(ctx, { id: "live", type: "stroke", color, width, points: live }, cssWidth, cssHeight);
     }
-  }, [board, color, width, notePreviews, cursors]);
+  }, [board, color, width, smoothCursors, smoothPreviews]);
 
   // Latest redraw wins: the resize observer must always paint current state.
   const redrawRef = useRef(redraw);
+
+  // Where the network says things are, kept in a ref so that animation does
+  // not depend on React having re-rendered.
+  useEffect(() => {
+    layersRef.current = { cursors, previews: notePreviews };
+  }, [cursors, notePreviews]);
+
+  // One frame at a time, and only while something is still catching up, so an
+  // idle board costs nothing.
+  const animate = useCallback((first: number) => {
+    const run = (now: number) => {
+      const dt = Math.min(64, Math.max(1, now - lastFrameRef.current));
+      lastFrameRef.current = now;
+      const targets = layersRef.current;
+      const moved = stepFollow(
+        cursorFollowRef.current,
+        targets.cursors.map((cursor) => [cursor.id, cursor.point] as const),
+        dt,
+      );
+      cursorFollowRef.current = moved.states;
+      const dragged = stepFollow(previewFollowRef.current, targets.previews ?? [], dt);
+      previewFollowRef.current = dragged.states;
+      redrawRef.current();
+      rafRef.current = moved.moving || dragged.moving ? requestAnimationFrame(run) : null;
+    };
+    run(first);
+  }, []);
+
+  useEffect(() => {
+    if (rafRef.current !== null) return;
+    if (cursors.length === 0 && !notePreviews?.size) return;
+    lastFrameRef.current = performance.now();
+    rafRef.current = requestAnimationFrame(animate);
+  }, [cursors, notePreviews, animate]);
+
+  useEffect(
+    () => () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    },
+    [],
+  );
 
   // Size the backing store once and on element resizes.
   useEffect(() => {

@@ -52,8 +52,9 @@ Click **New board**, copy the link, open it in a second window, and draw.
 
 Durable actions (strokes, notes, moves, deletes) go through the server: it
 validates, applies, persists, then broadcasts to everyone else. Presence,
-cursors, and drag previews are ephemeral and never stored. See
-[docs/realtime.md](docs/realtime.md).
+cursors, and drag previews are ephemeral and never stored; remote positions are
+smoothed client-side so they move at frame rate instead of stepping with each
+network update. See [docs/realtime.md](docs/realtime.md).
 
 ## Limits worth knowing
 
