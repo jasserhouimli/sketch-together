@@ -9,6 +9,7 @@ import {
   keepPreviewsFrom,
   pruneCursors,
   prunePreviews,
+  retargetPreview,
   toCursor,
   toPreview,
   upsertCursor,
@@ -130,6 +131,29 @@ describe("pruning", () => {
     const previews = new Map([["n1", preview()]]);
 
     expect(prunePreviews(previews, 1_000 + DRAG_PREVIEW_TTL_MS, DRAG_PREVIEW_TTL_MS).size).toBe(0);
+  });
+});
+
+describe("retargeting previews", () => {
+  it("points a note's preview at the committed position", () => {
+    const previews = new Map([["n1", preview()]]);
+
+    const next = retargetPreview(previews, "n1", { x: 0.8, y: 0.9 }, 4_000);
+
+    expect(next.get("n1")).toEqual({
+      id: "c1",
+      noteId: "n1",
+      point: { x: 0.8, y: 0.9 },
+      at: 4_000,
+    });
+    expect(previews.get("n1")?.point).toEqual({ x: 0.25, y: 0.25 });
+    expect(next).not.toBe(previews);
+  });
+
+  it("does nothing when the note has no preview", () => {
+    const previews = new Map([["n1", preview()]]);
+
+    expect(retargetPreview(previews, "n2", { x: 0.1, y: 0.1 }, 4_000)).toBe(previews);
   });
 });
 

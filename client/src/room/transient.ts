@@ -119,6 +119,24 @@ export function prunePreviews(
   return prune(previews, (preview) => now - preview.at < ttlMs);
 }
 
+/**
+ * Aims an existing preview at a new position, keeping its connection id. Used
+ * when the durable item.move lands: the ghost then has somewhere to glide to
+ * instead of jumping from wherever the drag last reported.
+ */
+export function retargetPreview(
+  previews: ReadonlyMap<string, DragPreview>,
+  noteId: string,
+  point: Point,
+  at: number,
+): ReadonlyMap<string, DragPreview> {
+  const existing = previews.get(noteId);
+  if (!existing) return previews;
+  const next = new Map(previews);
+  next.set(noteId, { ...existing, point, at });
+  return next;
+}
+
 /** Drops a note's preview, e.g. once the durable item.move arrives. */
 export function dropPreview(
   previews: ReadonlyMap<string, DragPreview>,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BoardView from "./board/BoardView";
 import Toolbar from "./board/Toolbar";
 import { DEFAULT_COLOR, DEFAULT_WIDTH } from "./board/pen";
+import { DEFAULT_NOTE_COLOR } from "./board/notes";
 import type { Tool } from "./board/tools";
 import type { Point } from "./board/types";
 import { BoardApiError, fetchBoard } from "./room/api";
@@ -16,6 +17,7 @@ import {
   keepPreviewsFrom,
   pruneCursors,
   prunePreviews,
+  retargetPreview,
   toCursor,
   toPreview,
   upsertCursor,
@@ -39,6 +41,14 @@ const CURSOR_SEND_MS = 40;
 const PREVIEW_SEND_MS = 60;
 /** How often expired cursors/previews are swept out of state. */
 const PRUNE_INTERVAL_MS = 500;
+/**
+ * A committed note move aims the peer's ghost at the final position; this is
+ * how long it is given to glide there before the preview is dropped.
+ */
+const MOVE_SETTLE_MS = 260;
+
+/** Bare-key tool switches, ignored while typing. */
+const TOOL_SHORTCUTS: Record<string, Tool> = { p: "pen", n: "note", e: "eraser" };
 
 const NO_CURSORS: ReadonlyMap<string, RemoteCursor> = new Map();
 const NO_PREVIEWS: ReadonlyMap<string, DragPreview> = new Map();
@@ -63,6 +73,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
   const [tool, setTool] = useState<Tool>("pen");
   const [color, setColor] = useState<string>(DEFAULT_COLOR);
   const [width, setWidth] = useState<number>(DEFAULT_WIDTH);
+  const [noteColor, setNoteColor] = useState<string>(DEFAULT_NOTE_COLOR);
   const [copied, setCopied] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(true);
   const [histState, setHistState] = useState({ undo: false, redo: false });
@@ -93,6 +104,41 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Ghosts that are gliding onto a committed position, keyed by note. The timer
+  // is what finally drops them, so a peer that stops mid-drag still decays.
+  const settleTimers = useRef(new Map<string, number>());
+
+  const cancelPreviewDrop = useCallback((noteId: string) => {
+    const timers = settleTimers.current;
+    const pending = timers.get(noteId);
+    if (pending === undefined) return;
+    window.clearTimeout(pending);
+    timers.delete(noteId);
+  }, []);
+
+  const schedulePreviewDrop = useCallback(
+    (noteId: string) => {
+      cancelPreviewDrop(noteId);
+      const timers = settleTimers.current;
+      timers.set(
+        noteId,
+        window.setTimeout(() => {
+          timers.delete(noteId);
+          setPreviews((prev) => dropPreview(prev, noteId));
+        }, MOVE_SETTLE_MS),
+      );
+    },
+    [cancelPreviewDrop],
+  );
+
+  useEffect(
+    () => () => {
+      for (const timer of settleTimers.current.values()) window.clearTimeout(timer);
+      settleTimers.current.clear();
+    },
+    [],
+  );
+
   const applyRemote = useCallback(
     (action: RemoteAction) => {
       const items = itemsRef.current;
@@ -112,15 +158,15 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         case "item.move": {
           const move = action.item as { id?: unknown; x?: unknown; y?: unknown };
           if (typeof move.id !== "string") return;
+          if (typeof move.x !== "number" || typeof move.y !== "number") return;
           const id = move.id;
-          // The committed position arrives: drop the in-flight preview.
-          setPreviews((prev) => dropPreview(prev, id));
+          const point = { x: move.x, y: move.y };
+          // The committed position arrives: aim the in-flight ghost at it so it
+          // glides the last few pixels instead of jumping, then let it go.
+          setPreviews((prev) => retargetPreview(prev, id, point, Date.now()));
+          schedulePreviewDrop(id);
           setItems(
-            items.map((i) =>
-              i.id === id && i.type === "note" && typeof move.x === "number" && typeof move.y === "number"
-                ? { ...i, x: move.x, y: move.y }
-                : i,
-            ),
+            items.map((i) => (i.id === id && i.type === "note" ? { ...i, ...point } : i)),
           );
           break;
         }
@@ -139,7 +185,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
       edits().clearRedo();
       touchHist();
     },
-    [setItems, touchHist],
+    [setItems, touchHist, schedulePreviewDrop],
   );
 
   const applySnapshot = useCallback(
@@ -161,11 +207,16 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     setCursors((prev) => upsertCursor(prev, toCursor(raw, now)));
   }, []);
 
-  const onPreview = useCallback((raw: unknown) => {
-    if (!isPreviewUpdate(raw)) return;
-    const now = Date.now();
-    setPreviews((prev) => upsertPreview(prev, toPreview(raw, now)));
-  }, []);
+  const onPreview = useCallback(
+    (raw: unknown) => {
+      if (!isPreviewUpdate(raw)) return;
+      const now = Date.now();
+      // A fresh gesture supersedes any pending handoff for this note.
+      cancelPreviewDrop(raw.noteId);
+      setPreviews((prev) => upsertPreview(prev, toPreview(raw, now)));
+    },
+    [cancelPreviewDrop],
+  );
 
   const { status, peers, selfId, send, sendCursor, sendDragPreview } = useBoardSync(
     roomId,
@@ -334,14 +385,23 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
-      if (!(e.ctrlKey || e.metaKey)) return;
-      if (e.key.toLowerCase() === "z" && !e.shiftKey) {
-        e.preventDefault();
-        doUndoRef.current();
-      } else if (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey)) {
-        e.preventDefault();
-        doRedoRef.current();
+      const key = e.key.toLowerCase();
+      if (e.ctrlKey || e.metaKey) {
+        if (key === "z" && !e.shiftKey) {
+          e.preventDefault();
+          doUndoRef.current();
+        } else if (key === "y" || (key === "z" && e.shiftKey)) {
+          e.preventDefault();
+          doRedoRef.current();
+        }
+        return;
       }
+      // Bare keys pick a tool, but never steal a modified shortcut.
+      if (e.altKey || e.shiftKey) return;
+      const shortcut = TOOL_SHORTCUTS[key];
+      if (!shortcut) return;
+      e.preventDefault();
+      setTool(shortcut);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -377,11 +437,13 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         tool={tool}
         color={color}
         width={width}
+        noteColor={noteColor}
         open={toolsOpen}
         onToggle={() => setToolsOpen((open) => !open)}
         onToolChange={setTool}
         onColorChange={setColor}
         onWidthChange={setWidth}
+        onNoteColorChange={setNoteColor}
         onClear={() => {
           // Clearing is not undoable in v1 (it would need a multi-action).
           setItems([]);
@@ -405,6 +467,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         tool={tool}
         color={color}
         width={width}
+        noteColor={noteColor}
         cursors={cursorViews}
         notePreviews={previewPositions}
         onPointerMovePos={(p) => cursorThrottle(p)}

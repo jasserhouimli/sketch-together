@@ -3,6 +3,7 @@ import { toPixels, toRelative } from "./geometry";
 import { findItemAt, findNoteAt } from "./hitTest";
 import { renderBoard, renderItem, type CursorView } from "./renderer";
 import { renderedPositions, stepFollow, type FollowState } from "../room/smoothing";
+import { DEFAULT_NOTE_TEXT } from "./notes";
 import type { Tool } from "./tools";
 import {
   isValidNote,
@@ -11,9 +12,6 @@ import {
   type Board,
   type Point,
 } from "./types";
-
-export const DEFAULT_NOTE_COLOR = "#fff2a8";
-export const DEFAULT_NOTE_TEXT = "New note";
 
 const NO_CURSORS: readonly CursorView[] = [];
 
@@ -35,6 +33,7 @@ export default function BoardView({
   tool,
   color,
   width,
+  noteColor,
   cursors = NO_CURSORS,
   notePreviews,
   onPointerMovePos,
@@ -50,6 +49,7 @@ export default function BoardView({
   tool: Tool;
   color: string;
   width: number;
+  noteColor: string;
   cursors?: readonly CursorView[];
   notePreviews?: ReadonlyMap<string, Point>;
   onPointerMovePos?: (point: Point) => void;
@@ -222,7 +222,7 @@ export default function BoardView({
           x: p.x,
           y: p.y,
           text: DEFAULT_NOTE_TEXT,
-          color: DEFAULT_NOTE_COLOR,
+          color: noteColor,
         };
         if (isValidNote(note)) onNoteAdd(note);
       }

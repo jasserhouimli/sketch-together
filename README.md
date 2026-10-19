@@ -14,21 +14,23 @@ moves live on the board:
 
 ![Two collaborators on one board, showing the second participant's name and cursor](docs/images/collab.png)
 
-Notes, the participant list, and the save indicator at a glance:
+Notes in two colors, the participant list, and the save indicator at a glance:
 
 ![Sticky notes with the participant list and the save indicator](docs/images/board.png)
 
 ## Features
 
-- **Live drawing** — freehand strokes with color and width choices, from a tool
-  rail that slides out of the way, synced as you draw.
-- **Sticky notes** — click to place, drag to move, double-click to edit.
+- **Live drawing** — freehand strokes with a color palette and four widths,
+  synced as you draw.
+- **Sticky notes** — click to place, drag to move, double-click to edit, in six
+  colors.
+- **Compact tool rail** — pen, note, and eraser behind `P` / `N` / `E`, and
+  `Ctrl+Z` / `Ctrl+Y` for undo and redo, shared with the room.
 - **Rooms via link** — each board gets a short shareable URL. No accounts.
 - **Presence with names and cursors** — everyone in the room appears in the room
   bar with a display name and a colour, and their pointer moves live on the
   board.
 - **Save state** — connection status and a save indicator on every edit.
-- **Undo / redo** (`Ctrl+Z` / `Ctrl+Y`) — works across the room.
 - **Persistent boards** — refresh or come back later; the board reloads as left.
 
 ## Quickstart
