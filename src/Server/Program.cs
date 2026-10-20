@@ -12,7 +12,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<BoardsDbContext>();
     db.Database.EnsureCreated();
 }
-
+// health check
 app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTimeOffset.UtcNow }));
 
 app.MapPost("/api/boards", async (BoardsDbContext db, CancellationToken ct) =>
