@@ -66,6 +66,20 @@
 .toolbar .clear-btn {
   padding: 7px 6px;
   font-size: 13px;
+  white-space: nowrap;
+}
+
+/* First click arms; the tighter padding keeps "Clear?" inside the rail. */
+.toolbar .clear-btn-armed {
+  padding: 7px 2px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(201, 42, 42, 0.4);
+}
+
+.toolbar .clear-btn-armed:hover {
+  background: #fde3e3;
+  border-color: var(--danger);
 }
 
 /* ------------------------------------------------------------------ home --- */

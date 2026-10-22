@@ -1,7 +1,10 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NOTE_COLORS } from "./notes";
 import { PEN_COLORS, PEN_WIDTHS } from "./pen";
 import type { Tool } from "./tools";
+
+/** How long the armed Clear button waits for its second click. */
+const CLEAR_CONFIRM_MS = 3000;
 
 /**
  * Tool rail: tool switch, palette for the active tool, undo/redo, clear. It is
@@ -43,6 +46,37 @@ export default function Toolbar({
   canUndo: boolean;
   canRedo: boolean;
 }) {
+  // Clearing wipes the board for everyone and is not undoable, so the first
+  // click only arms the button; a second click within three seconds clears.
+  const [armed, setArmed] = useState(false);
+  const disarmTimer = useRef<number | null>(null);
+
+  const disarm = () => {
+    if (disarmTimer.current !== null) window.clearTimeout(disarmTimer.current);
+    disarmTimer.current = null;
+    setArmed(false);
+  };
+
+  const handleClear = () => {
+    if (armed) {
+      disarm();
+      onClear();
+      return;
+    }
+    setArmed(true);
+    disarmTimer.current = window.setTimeout(() => {
+      disarmTimer.current = null;
+      setArmed(false);
+    }, CLEAR_CONFIRM_MS);
+  };
+
+  useEffect(
+    () => () => {
+      if (disarmTimer.current !== null) window.clearTimeout(disarmTimer.current);
+    },
+    [],
+  );
+
   const toolBtn = (t: Tool, label: string, key: string, icon: ReactNode) => (
     <button
       key={t}
@@ -142,11 +176,17 @@ export default function Toolbar({
         )}
         <button
           type="button"
-          className="clear-btn"
-          onClick={onClear}
-          title="Remove every item from the board"
+          className={`clear-btn${armed ? " clear-btn-armed" : ""}`}
+          onClick={handleClear}
+          onBlur={disarm}
+          title={
+            armed
+              ? "Click again to clear the board for everyone"
+              : "Remove every item from the board"
+          }
+          aria-label={armed ? "Confirm clearing the board" : "Clear the board"}
         >
-          Clear
+          {armed ? "Clear?" : "Clear"}
         </button>
         <div className="toolbar-group toolbar-group-row" role="group" aria-label="History">
           <button
