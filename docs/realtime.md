@@ -52,6 +52,9 @@ follow the pointer exactly.
 `JoinBoard(boardId, displayName)` registers the connection in an in-memory
 presence table and returns the current items, the caller's connection id, and
 the roster. `PresenceChanged` re-broadcasts the roster on join and disconnect.
+`Rename(displayName)` replaces the caller's name in place — same connection,
+colour, and roster position — and re-broadcasts. It is ephemeral like the rest of
+presence: nothing is written to the board row, so a rename never costs a save.
 Each participant gets a stable colour derived from the connection id (FNV-1a, so
 it does not change between processes), which the client reuses for that person's
 cursor.

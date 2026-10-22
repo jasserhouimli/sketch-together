@@ -12,7 +12,8 @@ namespace SketchTogether.Server.Features.Boards;
 ///
 /// Two channels share the connection:
 /// - durable: <see cref="SendAction"/>, validated and persisted, then broadcast;
-/// - ephemeral: cursors and drag previews, relayed to the room and never stored.
+/// - ephemeral: cursors and drag previews, relayed to the room and never stored;
+///   display names are presence only, so a rename never touches the board row.
 ///   Losing one is invisible; the durable action on release is the truth.
 /// </summary>
 public sealed class BoardHub(BoardsDbContext db) : Hub
@@ -40,6 +41,17 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
         var row = await db.Boards.FindAsync([boardId]);
         return new JoinResult(
             BoardDto.From(row!).Items.GetRawText(), Context.ConnectionId, RosterDto(boardId));
+    }
+
+    /// <summary>
+    /// Changes the caller's display name and re-broadcasts the roster, so the
+    /// room and its cursors pick it up. Names are cosmetic: sanitized like a
+    /// join, never persisted, and no other participant's state is touched.
+    /// </summary>
+    public async Task Rename(string? displayName)
+    {
+        var boardId = Presence.Rename(Context.ConnectionId, displayName);
+        if (boardId is not null) await BroadcastRosterAsync(boardId);
     }
 
     /// <summary>Applies one action; returns the save timestamp as the ack.</summary>

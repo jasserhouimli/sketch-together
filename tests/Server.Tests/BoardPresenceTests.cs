@@ -86,6 +86,51 @@ public sealed class BoardPresenceTests
         Assert.Null(new BoardPresence().Find("conn-1"));
     }
 
+    [Fact]
+    public void Rename_replaces_the_name_and_keeps_the_rest()
+    {
+        var presence = new BoardPresence();
+        var before = presence.Join(Board, "conn-1", "Alice");
+
+        Assert.Equal(Board, presence.Rename("conn-1", "Ada"));
+        var after = Assert.Single(presence.Roster(Board));
+        Assert.Equal("Ada", after.Name);
+        Assert.Equal(before.ConnectionId, after.ConnectionId);
+        Assert.Equal(before.Color, after.Color);
+    }
+
+    [Fact]
+    public void Rename_keeps_the_roster_position()
+    {
+        var presence = new BoardPresence();
+        presence.Join(Board, "conn-1", "Alice");
+        presence.Join(Board, "conn-2", "Bob");
+
+        presence.Rename("conn-1", "Ada");
+
+        Assert.Equal(new[] { "Ada", "Bob" }, presence.Roster(Board).Select(p => p.Name));
+    }
+
+    [Fact]
+    public void Rename_sanitizes_untrusted_input()
+    {
+        var presence = new BoardPresence();
+        presence.Join(Board, "conn-1", "Alice");
+
+        presence.Rename("conn-1", "  \u0001  ");
+
+        Assert.Equal(BoardPresence.FallbackName, presence.Roster(Board)[0].Name);
+    }
+
+    [Fact]
+    public void Rename_is_null_for_a_connection_that_never_joined()
+    {
+        var presence = new BoardPresence();
+
+        Assert.Null(presence.Rename("conn-1", "Alice"));
+        Assert.Empty(presence.Roster(Board));
+    }
+
     [Theory]
     [InlineData(null, "Guest")]
     [InlineData("", "Guest")]

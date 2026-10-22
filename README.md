@@ -29,7 +29,8 @@ Notes in two colors, the participant list, and the save indicator at a glance:
 - **Rooms via link** — each board gets a short shareable URL. No accounts.
 - **Presence with names and cursors** — everyone in the room appears in the room
   bar with a display name and a colour, and their pointer moves live on the
-  board.
+  board. Your own chip is editable, so the new name reaches the room without a
+  reload.
 - **Save state** — connection status and a save indicator on every edit.
 - **Persistent boards** — refresh or come back later; the board reloads as left.
 

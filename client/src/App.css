@@ -411,6 +411,38 @@
   text-overflow: ellipsis;
 }
 
+/* Your own chip doubles as the rename control. */
+.peer-name-edit {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  font: inherit;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: 0;
+  cursor: text;
+}
+
+.peer-name-edit:hover {
+  color: var(--accent);
+}
+
+.peer-name-input {
+  width: 110px;
+  min-width: 0;
+  padding: 2px 4px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
 .peer-dot {
   width: 9px;
   height: 9px;

@@ -149,5 +149,13 @@ export function useBoardSync(
     void conn.invoke("DragPreview", noteId, x, y).catch(() => {});
   }, []);
 
-  return { status, peers, selfId, send, sendCursor, sendDragPreview };
+  // Presence only: the server re-broadcasts the roster, so nothing durable
+  // changes. Offline the name still updates locally and the next join sends it.
+  const rename = useCallback((name: string) => {
+    const conn = connRef.current;
+    if (!conn || conn.state !== HubConnectionState.Connected) return;
+    void conn.invoke("Rename", name).catch(() => {});
+  }, []);
+
+  return { status, peers, selfId, send, sendCursor, sendDragPreview, rename };
 }

@@ -46,6 +46,23 @@ public sealed class BoardPresence
         return participant;
     }
 
+    /// <summary>
+    /// Replaces a connection's display name in place, keeping its colour and
+    /// roster position. Returns the board it is in, or null if it is not known.
+    /// </summary>
+    public string? Rename(string connectionId, string? requestedName)
+    {
+        lock (_gate)
+        {
+            if (!_boardByConnection.TryGetValue(connectionId, out var boardId)) return null;
+            if (!_rooms.TryGetValue(boardId, out var members)) return null;
+            var index = members.FindIndex(m => m.ConnectionId == connectionId);
+            if (index < 0) return null;
+            members[index] = members[index] with { Name = SanitizeName(requestedName) };
+            return boardId;
+        }
+    }
+
     /// <summary>Drops a connection; returns the board it was in, or null if unknown.</summary>
     public string? Leave(string connectionId)
     {
