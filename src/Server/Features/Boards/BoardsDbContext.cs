@@ -12,6 +12,7 @@ public sealed class BoardsDbContext(DbContextOptions<BoardsDbContext> options) :
         {
             e.HasKey(x => x.Id);
             e.Property(x => x.Id).HasMaxLength(32).IsRequired();
+            e.Property(x => x.EditKeyHash).HasMaxLength(BoardAccess.HashLength);
             e.Property(x => x.ItemsJson).IsRequired();
         });
     }

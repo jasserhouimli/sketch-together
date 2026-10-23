@@ -38,6 +38,24 @@ public sealed class BoardStoreTests : IAsyncLifetime
         Assert.Contains("stroke", row.ItemsJson);
         Assert.True(row.CreatedAt <= DateTimeOffset.UtcNow);
     }
+
+    [Fact]
+    public async Task Stores_only_the_edit_key_hash()
+    {
+        var id = BoardIds.Generate();
+        var editKey = BoardAccess.GenerateEditKey();
+        _db.Boards.Add(new Board { Id = id, EditKeyHash = BoardAccess.HashEditKey(editKey) });
+        await _db.SaveChangesAsync();
+
+        await using var fresh = new BoardsDbContext(
+            new DbContextOptionsBuilder<BoardsDbContext>().UseSqlite(_conn).Options);
+        var row = await fresh.Boards.FindAsync([id]);
+
+        Assert.NotNull(row);
+        Assert.NotEqual(editKey, row.EditKeyHash);
+        Assert.Equal(BoardAccess.HashEditKey(editKey), row.EditKeyHash);
+        Assert.True(BoardAccess.Verify(editKey, row.EditKeyHash));
+    }
 }
 
 public sealed class BoardIdTests

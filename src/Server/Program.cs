@@ -11,16 +11,24 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<BoardsDbContext>();
     db.Database.EnsureCreated();
+    BoardSchema.EnsureEditKeyColumn(db);
 }
 // health check
 app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTimeOffset.UtcNow }));
 
 app.MapPost("/api/boards", async (BoardsDbContext db, CancellationToken ct) =>
 {
-    var board = new Board { Id = BoardIds.Generate() };
+    // The key is returned once, in the create response. Only its hash is
+    // stored, so the edit link cannot be recovered from the database.
+    var editKey = BoardAccess.GenerateEditKey();
+    var board = new Board
+    {
+        Id = BoardIds.Generate(),
+        EditKeyHash = BoardAccess.HashEditKey(editKey),
+    };
     db.Boards.Add(board);
     await db.SaveChangesAsync(ct);
-    return Results.Created($"/api/boards/{board.Id}", new { board.Id });
+    return Results.Created($"/api/boards/{board.Id}", new { board.Id, editKey });
 });
 
 app.MapGet("/api/boards/{id}", async (string id, BoardsDbContext db, CancellationToken ct) =>
