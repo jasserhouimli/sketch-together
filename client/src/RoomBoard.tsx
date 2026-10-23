@@ -85,6 +85,9 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
   const [previews, setPreviews] = useState(NO_PREVIEWS);
   const itemsRef = useRef<BoardItem[]>([]);
   const editsRef = useRef<EditHistory | null>(null);
+  // The hub snapshot is newer than the REST load; once it lands, ignore the
+  // slower REST response so it cannot overwrite replayed pending edits.
+  const snapshotSeenRef = useRef(false);
 
   // Session undo: inverses are new actions, so everyone converges. Created
   // lazily (never during render) and mirrored to state for the buttons.
@@ -182,6 +185,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
       for (const action of pending) {
         items = applyAction(items, action) ?? items;
       }
+      snapshotSeenRef.current = true;
       setItems(items);
     },
     [setItems],
@@ -282,13 +286,13 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     let cancelled = false;
     fetchBoard(roomId).then(
       (board) => {
-        if (!cancelled) {
+        if (!cancelled && !snapshotSeenRef.current) {
           itemsRef.current = board.items;
           setState({ status: "ready", board });
         }
       },
       (e) => {
-        if (!cancelled) {
+        if (!cancelled && !snapshotSeenRef.current) {
           setState({
             status: "error",
             message: e instanceof BoardApiError ? e.message : "Could not open the board.",

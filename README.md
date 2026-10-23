@@ -67,7 +67,8 @@ network update. See [docs/realtime.md](docs/realtime.md).
 - Cursors, names, and drag previews are ephemeral — a restart drops them and
   everyone rejoins.
 - Offline edits queue in this tab and flush in order when the connection
-  returns. The queue is in memory, so a refresh drops it.
+  returns. The queue survives a refresh but not closing the tab, and opening a
+  board still needs the server.
 - Boards are public to anyone with the link; there is no access control.
 
 ## License

@@ -4,7 +4,7 @@ import {
   HubConnectionState,
   type HubConnection,
 } from "@microsoft/signalr";
-import { Outbox, type OutgoingAction } from "./outbox";
+import { loadOutbox, saveOutbox, type OutgoingAction } from "./outbox";
 import { toRoster, type Peer } from "./presence";
 
 export type SyncStatus = "connecting" | "live" | "reconnecting" | "offline";
@@ -47,12 +47,13 @@ export function useBoardSync(
   const [status, setStatus] = useState<SyncStatus>("connecting");
   const [peers, setPeers] = useState<Peer[]>([]);
   const [selfId, setSelfId] = useState<string | null>(null);
-  const [pendingCount, setPendingCount] = useState(0);
+  // The queue survives a refresh in this tab, so load it before the first paint.
+  const [outbox] = useState(() => loadOutbox(sessionStore(), roomId));
+  const [pendingCount, setPendingCount] = useState(outbox.size);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [saveFailed, setSaveFailed] = useState(false);
   const connRef = useRef<HubConnection | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
-  const outboxRef = useRef(new Outbox());
   const pumpingRef = useRef(false);
   const retryTimerRef = useRef<number | null>(null);
   const handlersRef = useRef(handlers);
@@ -62,6 +63,11 @@ export function useBoardSync(
   // effect below reads through this ref so it never needs to rebuild.
   handlersRef.current = handlers;
   nameRef.current = displayName;
+
+  /** Mirrors the queue to sessionStorage so a refresh keeps pending edits. */
+  const persist = useCallback(() => {
+    saveOutbox(sessionStore(), roomId, outbox.all);
+  }, [outbox, roomId]);
 
   /**
    * Sends queued actions in order, one at a time, until the queue is empty or
@@ -75,8 +81,8 @@ export function useBoardSync(
     if (!conn || conn.state !== HubConnectionState.Connected) return;
     pumpingRef.current = true;
     try {
-      while (outboxRef.current.size > 0) {
-        const action = outboxRef.current.peek();
+      while (outbox.size > 0) {
+        const action = outbox.peek();
         if (!action) break;
         const envelope = {
           boardId: roomId,
@@ -86,7 +92,8 @@ export function useBoardSync(
         };
         try {
           const savedAt = await conn.invoke<string>("SendAction", envelope);
-          outboxRef.current.ack(action.actionId);
+          outbox.ack(action.actionId);
+          persist();
           setLastSavedAt(savedAt);
           setSaveFailed(false);
         } catch (error) {
@@ -101,15 +108,16 @@ export function useBoardSync(
             }, 1000);
             break;
           }
-          outboxRef.current.ack(action.actionId);
+          outbox.ack(action.actionId);
+          persist();
         }
-        setPendingCount(outboxRef.current.size);
+        setPendingCount(outbox.size);
       }
     } finally {
       pumpingRef.current = false;
-      setPendingCount(outboxRef.current.size);
+      setPendingCount(outbox.size);
     }
-  }, [roomId]);
+  }, [outbox, persist, roomId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,7 +140,7 @@ export function useBoardSync(
       if (cancelled) return;
       setSelfId(typeof snapshot.selfId === "string" ? snapshot.selfId : null);
       setPeers(toRoster(snapshot.participants));
-      handlersRef.current.onJoined(snapshot, outboxRef.current.all);
+      handlersRef.current.onJoined(snapshot, outbox.all);
       void pump();
     };
 
@@ -192,11 +200,12 @@ export function useBoardSync(
   const send = useCallback(
     (type: string, item: unknown): void => {
       const action: OutgoingAction = { actionId: crypto.randomUUID(), type, item };
-      if (outboxRef.current.enqueue(action) > 0) setSaveFailed(true);
-      setPendingCount(outboxRef.current.size);
+      if (outbox.enqueue(action) > 0) setSaveFailed(true);
+      persist();
+      setPendingCount(outbox.size);
       void pump();
     },
-    [pump],
+    [outbox, persist, pump],
   );
 
   // Ephemeral sends are dropped when the connection is down: the next pointer
@@ -233,4 +242,13 @@ export function useBoardSync(
     lastSavedAt,
     saveFailed,
   };
+}
+
+/** Session storage can be unavailable (sandboxed frames, private mode). */
+function sessionStore(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
 }

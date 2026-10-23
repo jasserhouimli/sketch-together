@@ -23,8 +23,12 @@ actions onto the snapshot so they do not visibly roll back, then flushes them.
 Actions are idempotent on the server (upserts, moves, deletes, a clear), so a
 lost ack that is replayed converges to the same board. A connection loss keeps
 the queue; an action the server rejects is dropped so a bad item cannot block
-everything behind it. The queue is in memory and scoped to the tab: a refresh
-drops pending edits, which is why the save indicator counts them.
+everything behind it. The queue is scoped to the tab and mirrored to
+sessionStorage (`sketchtogether.outbox.<roomId>`), so a refresh keeps pending
+edits while closing the tab drops them. Stored actions are treated as untrusted
+input: malformed entries are dropped on load, and the payload is capped. Opening
+a board still needs the server, so the save indicator is what shows queued work
+in the meantime.
 
 ## Ephemeral updates
 
