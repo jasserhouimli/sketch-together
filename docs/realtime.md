@@ -13,6 +13,19 @@ broadcast sequence, so the server's order is the board's order. Repeated
 Types: `stroke.add`, `note.add`, `note.update`, `item.move`, `item.delete`,
 `board.clear`.
 
+### Offline and the outbox
+
+The client sends durable actions through an ordered outbox (`room/outbox.ts`):
+one action is in flight at a time, and anything made while the connection is
+down waits in order. On reconnect the client rejoins, replays the pending
+actions onto the snapshot so they do not visibly roll back, then flushes them.
+
+Actions are idempotent on the server (upserts, moves, deletes, a clear), so a
+lost ack that is replayed converges to the same board. A connection loss keeps
+the queue; an action the server rejects is dropped so a bad item cannot block
+everything behind it. The queue is in memory and scoped to the tab: a refresh
+drops pending edits, which is why the save indicator counts them.
+
 ## Ephemeral updates
 
 Cursors and in-flight note drags are relayed to the room and never persisted:
@@ -66,7 +79,7 @@ still just network input.
 
 ## Client layers
 
-- `room/sync.ts` — connection, roster, sends; state of the durable channel.
+- `room/sync.ts` — connection, roster, sends, and the outbox flush loop.
 - `room/transient.ts` — cursor and preview state with TTLs (5 s, 3 s), so a
   peer that disappears mid-gesture leaves nothing behind.
 - `room/smoothing.ts` — turns each arriving position into a target and moves the

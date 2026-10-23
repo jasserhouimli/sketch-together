@@ -31,7 +31,8 @@ Notes in two colors, the participant list, and the save indicator at a glance:
   bar with a display name and a colour, and their pointer moves live on the
   board. Your own chip is editable, so the new name reaches the room without a
   reload.
-- **Save state** — connection status and a save indicator on every edit.
+- **Save state** — connection status, a save indicator on every edit, and how
+  many edits are waiting to sync while offline.
 - **Persistent boards** — refresh or come back later; the board reloads as left.
 
 ## Quickstart
@@ -65,7 +66,8 @@ network update. See [docs/realtime.md](docs/realtime.md).
   saved.
 - Cursors, names, and drag previews are ephemeral — a restart drops them and
   everyone rejoins.
-- Offline edits stay on the device; there is no send queue yet.
+- Offline edits queue in this tab and flush in order when the connection
+  returns. The queue is in memory, so a refresh drops it.
 - Boards are public to anyone with the link; there is no access control.
 
 ## License

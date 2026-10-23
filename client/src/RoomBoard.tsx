@@ -26,6 +26,8 @@ import {
   type RemoteCursor,
 } from "./room/transient";
 import { useBoardSync, type JoinSnapshot, type RemoteAction, type SyncStatus } from "./room/sync";
+import { applyAction } from "./board/applyAction";
+import type { OutgoingAction } from "./room/outbox";
 import {
   isValidItem,
   isValidNote,
@@ -141,47 +143,24 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
 
   const applyRemote = useCallback(
     (action: RemoteAction) => {
-      const items = itemsRef.current;
-      switch (action.type) {
-        case "stroke.add":
-        case "note.add":
-        case "note.update": {
-          if (!isValidItem(action.item)) return;
-          const item = action.item as BoardItem;
-          setItems(
-            items.some((i) => i.id === item.id)
-              ? items.map((i) => (i.id === item.id ? item : i))
-              : [...items, item],
-          );
-          break;
-        }
-        case "item.move": {
-          const move = action.item as { id?: unknown; x?: unknown; y?: unknown };
-          if (typeof move.id !== "string") return;
-          if (typeof move.x !== "number" || typeof move.y !== "number") return;
+      const next = applyAction(itemsRef.current, action);
+      if (next === null) return;
+      if (action.type === "item.move") {
+        const move = action.item as { id?: unknown; x?: unknown; y?: unknown };
+        if (
+          typeof move.id === "string" &&
+          typeof move.x === "number" &&
+          typeof move.y === "number"
+        ) {
           const id = move.id;
           const point = { x: move.x, y: move.y };
           // The committed position arrives: aim the in-flight ghost at it so it
           // glides the last few pixels instead of jumping, then let it go.
           setPreviews((prev) => retargetPreview(prev, id, point, Date.now()));
           schedulePreviewDrop(id);
-          setItems(
-            items.map((i) => (i.id === id && i.type === "note" ? { ...i, ...point } : i)),
-          );
-          break;
         }
-        case "item.delete": {
-          const id = (action.item as { id?: unknown })?.id;
-          if (typeof id !== "string") return;
-          setItems(items.filter((i) => i.id !== id));
-          break;
-        }
-        case "board.clear":
-          setItems([]);
-          break;
-        default:
-          return;
       }
+      setItems(next);
       edits().clearRedo();
       touchHist();
     },
@@ -189,14 +168,21 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
   );
 
   const applySnapshot = useCallback(
-    (snapshot: JoinSnapshot) => {
+    (snapshot: JoinSnapshot, pending: readonly OutgoingAction[]) => {
+      let parsed: unknown;
       try {
-        const parsed: unknown = JSON.parse(snapshot.itemsJson);
-        const items = Array.isArray(parsed) ? parsed.filter(isValidItem) : [];
-        setItems(items as BoardItem[]);
+        parsed = JSON.parse(snapshot.itemsJson);
       } catch {
         // Keep the REST-loaded board; the next refresh heals.
+        return;
       }
+      let items = (Array.isArray(parsed) ? parsed.filter(isValidItem) : []) as BoardItem[];
+      // Replay edits the server has not acknowledged yet, so a reconnect does
+      // not roll them back before the outbox flushes.
+      for (const action of pending) {
+        items = applyAction(items, action) ?? items;
+      }
+      setItems(items);
     },
     [setItems],
   );
@@ -218,16 +204,23 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     [cancelPreviewDrop],
   );
 
-  const { status, peers, selfId, send, sendCursor, sendDragPreview, rename } = useBoardSync(
-    roomId,
-    displayName,
-    {
-      onRemoteAction: applyRemote,
-      onJoined: applySnapshot,
-      onCursor,
-      onPreview,
-    },
-  );
+  const {
+    status,
+    peers,
+    selfId,
+    send,
+    sendCursor,
+    sendDragPreview,
+    rename,
+    pendingCount,
+    lastSavedAt,
+    saveFailed,
+  } = useBoardSync(roomId, displayName, {
+    onRemoteAction: applyRemote,
+    onJoined: applySnapshot,
+    onCursor,
+    onPreview,
+  });
 
   /** Renames this tab: kept for the session, then announced to the room. */
   const handleRename = (raw: string) => {
@@ -284,24 +277,6 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     () => new Map([...previews.values()].map((p) => [p.noteId, p.point] as const)),
     [previews],
   );
-
-  const [pendingSaves, setPendingSaves] = useState(0);
-  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
-  const [saveFailed, setSaveFailed] = useState(false);
-
-  const sendTracked = (type: string, item: unknown) => {
-    setPendingSaves((n) => n + 1);
-    void send(type, item).then((at) => {
-      setPendingSaves((n) => Math.max(0, n - 1));
-      // Null means offline or rejected: the edit stays local only.
-      if (at) {
-        setLastSavedAt(at);
-        setSaveFailed(false);
-      } else {
-        setSaveFailed(true);
-      }
-    });
-  };
 
   useEffect(() => {
     let cancelled = false;
@@ -366,7 +341,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     } else {
       return;
     }
-    sendTracked(type, item);
+    send(type, item);
   };
 
   const doUndo = () => {
@@ -456,7 +431,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         onClear={() => {
           // Clearing is not undoable in v1 (it would need a multi-action).
           setItems([]);
-          sendTracked("board.clear", {});
+          send("board.clear", {});
         }}
         onUndo={doUndo}
         onRedo={doRedo}
@@ -469,7 +444,12 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
           {copied ? "Copied!" : "Copy link"}
         </button>
         <StatusPill status={status} participants={participants} />
-        <SaveState pending={pendingSaves > 0} failed={saveFailed} at={lastSavedAt} />
+        <SaveState
+          pending={pendingCount}
+          offline={status !== "live"}
+          failed={saveFailed}
+          at={lastSavedAt}
+        />
       </div>
       <BoardView
         board={state.board}
@@ -489,7 +469,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
           });
           touchHist();
           upsertLocal(stroke);
-          sendTracked("stroke.add", stroke);
+          send("stroke.add", stroke);
         }}
         onNoteAdd={(note) => {
           if (!isValidNote(note)) return;
@@ -499,7 +479,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
           });
           touchHist();
           upsertLocal(note);
-          sendTracked("note.add", note);
+          send("note.add", note);
         }}
         onNoteMove={(id, x, y) => {
           setItems(
@@ -516,7 +496,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
             redo: { type: "item.move", item: { id, x: note.x, y: note.y } },
           });
           touchHist();
-          sendTracked("item.move", { id, x: note.x, y: note.y });
+          send("item.move", { id, x: note.x, y: note.y });
         }}
         onNoteEdit={(id, text) => {
           const note = noteById(id);
@@ -528,7 +508,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
           });
           touchHist();
           upsertLocal(updated);
-          sendTracked("note.update", updated);
+          send("note.update", updated);
         }}
         onDeleteItem={(id) => {
           const item = itemById(id);
@@ -543,7 +523,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
             touchHist();
           }
           setItems(itemsRef.current.filter((i) => i.id !== id));
-          sendTracked("item.delete", { id });
+          send("item.delete", { id });
         }}
       />
     </main>
@@ -661,11 +641,30 @@ function StatusPill({ status, participants }: { status: SyncStatus; participants
   );
 }
 
-function SaveState({ pending, failed, at }: { pending: boolean; failed: boolean; at: string | null }) {
-  if (pending) {
+function SaveState({
+  pending,
+  offline,
+  failed,
+  at,
+}: {
+  pending: number;
+  offline: boolean;
+  failed: boolean;
+  at: string | null;
+}) {
+  if (pending > 0) {
+    // Offline edits are queued, not lost: say how many are waiting to sync.
     return (
-      <span className="status-pill" role="status" title="Sending the edit to the server">
-        Saving…
+      <span
+        className={`status-pill${offline ? " status-offline" : ""}`}
+        role="status"
+        title={
+          offline
+            ? "Edits stay on this device and sync in order when the connection returns"
+            : "Sending edits to the server"
+        }
+      >
+        {offline ? `${pending} queued` : "Saving…"}
       </span>
     );
   }
