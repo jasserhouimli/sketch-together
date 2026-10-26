@@ -7,7 +7,13 @@ import {
 import { loadOutbox, saveOutbox, type OutgoingAction } from "./outbox";
 import { toRoster, type Peer } from "./presence";
 
-export type SyncStatus = "connecting" | "live" | "reconnecting" | "offline";
+export type SyncStatus =
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "offline"
+  /** The connection is open, but the server refused this link. */
+  | "rejected";
 
 export interface RemoteAction {
   actionId: string;
@@ -159,6 +165,9 @@ export function useBoardSync(
           if (isHubRejection(error)) {
             canEditRef.current = false;
             setCanEdit(false);
+            setStatus("rejected");
+          } else {
+            setStatus("offline");
           }
         }
         throw error;
@@ -207,8 +216,9 @@ export function useBoardSync(
       .then(() => {
         if (!cancelled) setStatus("live");
       })
-      .catch(() => {
-        if (!cancelled) setStatus("offline");
+      .catch((error) => {
+        // join() owns a rejected link; this catch also covers a start failure.
+        if (!cancelled && !isHubRejection(error)) setStatus("offline");
       });
 
     return () => {

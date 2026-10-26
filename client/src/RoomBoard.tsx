@@ -7,6 +7,7 @@ import type { Tool } from "./board/tools";
 import type { Point } from "./board/types";
 import { BoardApiError, fetchBoard } from "./room/api";
 import { editRoomUrl, roomUrl } from "./room/route";
+import { statusLabel, statusTitle } from "./room/status";
 import { EditHistory } from "./board/history";
 import { resolveDisplayName, sanitizeName, setStoredName, DISPLAY_NAME_MAX, type Peer } from "./room/presence";
 import { createThrottle } from "./room/throttle";
@@ -683,20 +684,8 @@ function StatusPill({
   participants: number;
   readOnly: boolean;
 }) {
-  const label =
-    status === "live"
-      ? `Live · ${participants}`
-      : status === "connecting"
-        ? "Connecting…"
-        : status === "reconnecting"
-          ? "Reconnecting…"
-          : "Offline";
-  const title =
-    status === "live"
-      ? `${participants} participant${participants === 1 ? "" : "s"} connected`
-      : readOnly
-        ? "The board will catch up when the connection returns"
-        : "Edits stay on this device until the connection returns";
+  const label = statusLabel(status, participants);
+  const title = statusTitle(status, participants, readOnly);
   return (
     <span className={`status-pill status-${status}`} title={title} role="status">
       <span className="status-dot" aria-hidden />

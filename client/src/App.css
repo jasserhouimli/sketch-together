@@ -543,8 +543,14 @@
   background: var(--danger-soft);
 }
 
-.status-offline .status-dot {
+.status-offline .status-dot,
+.status-rejected .status-dot {
   background: var(--danger);
+}
+
+.status-rejected {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 /* ----------------------------------------------------------------- board --- */
