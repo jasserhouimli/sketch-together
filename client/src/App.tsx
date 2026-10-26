@@ -1,13 +1,21 @@
 import { useState } from "react";
 import RoomBoard from "./RoomBoard";
 import { BoardApiError, createBoard } from "./room/api";
-import { useRoomId } from "./room/route";
+import { editRoomUrl, useRoomRoute } from "./room/route";
 import "./App.css";
 
 function App() {
-  const roomId = useRoomId();
-  // Key remounts the room on navigation so load state starts fresh.
-  if (roomId) return <RoomBoard key={roomId} roomId={roomId} />;
+  const route = useRoomRoute();
+  // Key remounts the room when the id or the edit/view mode changes.
+  if (route) {
+    return (
+      <RoomBoard
+        key={`${route.roomId}:${route.editKey ?? "view"}`}
+        roomId={route.roomId}
+        editKey={route.editKey}
+      />
+    );
+  }
   return <Home />;
 }
 
@@ -19,8 +27,9 @@ function Home() {
     setCreating(true);
     setError(null);
     try {
-      const id = await createBoard();
-      window.location.hash = `#/b/${id}`;
+      const board = await createBoard();
+      // Land on the edit link: the view link is what gets shared.
+      window.location.href = editRoomUrl(board.id, board.editKey);
     } catch (e) {
       setError(e instanceof BoardApiError ? e.message : "Could not create a board.");
       setCreating(false);
@@ -42,7 +51,8 @@ function Home() {
         </svg>
         <h1>SketchTogether</h1>
         <p className="home-lede">
-          Draw and take notes together, live, through a shareable link.
+          Draw and take notes together, live. Share the view link; keep the edit link to
+          change the board.
         </p>
         <button type="button" className="create-btn" onClick={create} disabled={creating}>
           {creating ? "Creating…" : "New board"}
@@ -50,7 +60,7 @@ function Home() {
         <ul className="home-points">
           <li>Live cursors</li>
           <li>Sticky notes</li>
-          <li>Saved automatically</li>
+          <li>View or edit links</li>
         </ul>
       </section>
       {error && (

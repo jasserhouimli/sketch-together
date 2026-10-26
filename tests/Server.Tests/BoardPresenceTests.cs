@@ -12,7 +12,7 @@ public sealed class BoardPresenceTests
     {
         var presence = new BoardPresence();
 
-        var alice = presence.Join(Board, "conn-1", "Alice");
+        var alice = presence.Join(Board, "conn-1", "Alice", true);
 
         Assert.Equal("conn-1", alice.ConnectionId);
         Assert.Equal("Alice", alice.Name);
@@ -24,9 +24,9 @@ public sealed class BoardPresenceTests
     {
         var presence = new BoardPresence();
 
-        presence.Join(Board, "conn-1", "Alice");
-        presence.Join(Board, "conn-2", "Bob");
-        presence.Join(Board, "conn-3", "Cleo");
+        presence.Join(Board, "conn-1", "Alice", true);
+        presence.Join(Board, "conn-2", "Bob", true);
+        presence.Join(Board, "conn-3", "Cleo", true);
 
         Assert.Equal(new[] { "Alice", "Bob", "Cleo" }, presence.Roster(Board).Select(p => p.Name));
     }
@@ -36,8 +36,8 @@ public sealed class BoardPresenceTests
     {
         var presence = new BoardPresence();
 
-        presence.Join(Board, "conn-1", "Alice");
-        presence.Join(Other, "conn-2", "Bob");
+        presence.Join(Board, "conn-1", "Alice", true);
+        presence.Join(Other, "conn-2", "Bob", true);
 
         Assert.Equal(new[] { "Alice" }, presence.Roster(Board).Select(p => p.Name));
         Assert.Equal(new[] { "Bob" }, presence.Roster(Other).Select(p => p.Name));
@@ -49,8 +49,8 @@ public sealed class BoardPresenceTests
     {
         var presence = new BoardPresence();
 
-        presence.Join(Board, "conn-1", "Alice");
-        presence.Join(Other, "conn-1", "Alice");
+        presence.Join(Board, "conn-1", "Alice", true);
+        presence.Join(Other, "conn-1", "Alice", true);
 
         Assert.Empty(presence.Roster(Board));
         Assert.Equal(new[] { "Alice" }, presence.Roster(Other).Select(p => p.Name));
@@ -62,17 +62,33 @@ public sealed class BoardPresenceTests
     {
         var presence = new BoardPresence();
 
-        presence.Join(Board, "conn-1", "Alice");
-        presence.Join(Board, "conn-1", "Alice");
+        presence.Join(Board, "conn-1", "Alice", true);
+        presence.Join(Board, "conn-1", "Alice", true);
 
         Assert.Single(presence.Roster(Board));
+    }
+
+    [Fact]
+    public void Join_records_edit_permission_and_rename_keeps_it()
+    {
+        var presence = new BoardPresence();
+        var viewer = presence.Join(Board, "conn-1", "Alice", canEdit: false);
+        presence.Join(Board, "conn-2", "Bob", canEdit: true);
+
+        Assert.False(viewer.CanEdit);
+        Assert.False(presence.Find("conn-1")!.Participant.CanEdit);
+        Assert.True(presence.Find("conn-2")!.Participant.CanEdit);
+
+        presence.Rename("conn-1", "Ada");
+
+        Assert.False(presence.Find("conn-1")!.Participant.CanEdit);
     }
 
     [Fact]
     public void Leave_reports_the_board_once()
     {
         var presence = new BoardPresence();
-        presence.Join(Board, "conn-1", "Alice");
+        presence.Join(Board, "conn-1", "Alice", true);
 
         Assert.Equal(Board, presence.Leave("conn-1"));
         Assert.Null(presence.Leave("conn-1"));
@@ -90,7 +106,7 @@ public sealed class BoardPresenceTests
     public void Rename_replaces_the_name_and_keeps_the_rest()
     {
         var presence = new BoardPresence();
-        var before = presence.Join(Board, "conn-1", "Alice");
+        var before = presence.Join(Board, "conn-1", "Alice", true);
 
         Assert.Equal(Board, presence.Rename("conn-1", "Ada"));
         var after = Assert.Single(presence.Roster(Board));
@@ -103,8 +119,8 @@ public sealed class BoardPresenceTests
     public void Rename_keeps_the_roster_position()
     {
         var presence = new BoardPresence();
-        presence.Join(Board, "conn-1", "Alice");
-        presence.Join(Board, "conn-2", "Bob");
+        presence.Join(Board, "conn-1", "Alice", true);
+        presence.Join(Board, "conn-2", "Bob", true);
 
         presence.Rename("conn-1", "Ada");
 
@@ -115,7 +131,7 @@ public sealed class BoardPresenceTests
     public void Rename_sanitizes_untrusted_input()
     {
         var presence = new BoardPresence();
-        presence.Join(Board, "conn-1", "Alice");
+        presence.Join(Board, "conn-1", "Alice", true);
 
         presence.Rename("conn-1", "  \u0001  ");
 

@@ -3,6 +3,22 @@ using System.Text;
 
 namespace SketchTogether.Server.Features.Boards;
 
+/// <summary>How a presented edit key relates to a board.</summary>
+public enum BoardEditAccess
+{
+    /// <summary>The board predates edit links and stays open to the link holder.</summary>
+    LegacyOpen,
+
+    /// <summary>A key was presented and matches the stored hash.</summary>
+    Granted,
+
+    /// <summary>The board requires a key and none was presented.</summary>
+    Missing,
+
+    /// <summary>A key was presented but is malformed or wrong.</summary>
+    Invalid,
+}
+
 /// <summary>
 /// Board edit capabilities. The public view link is the board id; changing the
 /// board needs a separate high-entropy key that travels only in the edit link.
@@ -11,6 +27,16 @@ namespace SketchTogether.Server.Features.Boards;
 /// </summary>
 public static class BoardAccess
 {
+    /// <summary>Classifies a join attempt without exposing why a key failed.</summary>
+    public static BoardEditAccess CheckEditKey(Board board, string? presentedKey)
+    {
+        if (board.EditKeyHash is null) return BoardEditAccess.LegacyOpen;
+        if (presentedKey is null) return BoardEditAccess.Missing;
+        return Verify(presentedKey, board.EditKeyHash)
+            ? BoardEditAccess.Granted
+            : BoardEditAccess.Invalid;
+    }
+
     /// <summary>256 bits of entropy, rendered as lowercase hex.</summary>
     public const int EditKeyBytes = 32;
 

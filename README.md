@@ -26,7 +26,9 @@ Notes in two colors, the participant list, and the save indicator at a glance:
   colors.
 - **Compact tool rail** — pen, note, and eraser behind `P` / `N` / `E`, and
   `Ctrl+Z` / `Ctrl+Y` for undo and redo, shared with the room.
-- **Rooms via link** — each board gets a short shareable URL. No accounts.
+- **View and edit links** — a new board opens its edit link; the view link is
+  what you share. Anyone with the view link can watch live, while the key in the
+  edit link is needed to change anything. No accounts.
 - **Presence with names and cursors** — everyone in the room appears in the room
   bar with a display name and a colour, and their pointer moves live on the
   board. Your own chip is editable, so the new name reaches the room without a
@@ -50,7 +52,8 @@ npm install
 npm run dev
 ```
 
-Click **New board**, copy the link, open it in a second window, and draw.
+Click **New board**. You land on the edit link; copy the **view link** to share
+and keep the edit link to change the board.
 
 ## Realtime model
 
@@ -69,7 +72,10 @@ network update. See [docs/realtime.md](docs/realtime.md).
 - Offline edits queue in this tab and flush in order when the connection
   returns. The queue survives a refresh but not closing the tab, and opening a
   board still needs the server.
-- Boards are public to anyone with the link; there is no access control.
+- Anyone with the view link can open a board. Editing needs the edit link: its
+  key is the credential, stored only as a hash, so it cannot be recovered —
+  losing it means losing edit access. There are no accounts, expiry, or
+  revocation; changing the key would mean issuing a new board.
 
 ## License
 

@@ -62,6 +62,29 @@ public sealed class BoardAccessTests
 
         Assert.False(BoardAccess.Verify(other, BoardAccess.HashEditKey(key)));
     }
+
+    [Fact]
+    public void CheckEditKey_classifies_access()
+    {
+        var key = BoardAccess.GenerateEditKey();
+        var board = new Board { EditKeyHash = BoardAccess.HashEditKey(key) };
+
+        Assert.Equal(BoardEditAccess.Granted, BoardAccess.CheckEditKey(board, key));
+        Assert.Equal(BoardEditAccess.Missing, BoardAccess.CheckEditKey(board, null));
+        Assert.Equal(BoardEditAccess.Invalid, BoardAccess.CheckEditKey(board, "not-a-key"));
+        Assert.Equal(
+            BoardEditAccess.Invalid,
+            BoardAccess.CheckEditKey(board, BoardAccess.GenerateEditKey()));
+    }
+
+    [Fact]
+    public void CheckEditKey_treats_a_board_without_a_hash_as_legacy_open()
+    {
+        var legacy = new Board();
+
+        Assert.Equal(BoardEditAccess.LegacyOpen, BoardAccess.CheckEditKey(legacy, null));
+        Assert.Equal(BoardEditAccess.LegacyOpen, BoardAccess.CheckEditKey(legacy, "anything"));
+    }
 }
 
 public sealed class BoardSchemaTests : IAsyncLifetime

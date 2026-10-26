@@ -320,6 +320,27 @@
   cursor: default;
 }
 
+.swatch:disabled,
+.width-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.swatch:disabled:hover,
+.width-btn:disabled:hover {
+  transform: none;
+}
+
+.clear-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.clear-btn:disabled:hover {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+
 .swatch {
   width: 22px;
   height: 22px;
@@ -395,6 +416,24 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
+}
+
+/* Join problems (a bad edit key, a missing board) float above the board. */
+.room-error {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  z-index: 11;
+  max-width: min(90vw, 420px);
+  padding: 8px 14px;
+  color: var(--danger);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  font-size: 13px;
+  text-align: center;
+  transform: translateX(-50%);
 }
 
 .peer-chips {
@@ -539,6 +578,11 @@
 
 .board-canvas.tool-eraser {
   cursor: cell;
+}
+
+/* The view link stays live and still shows everyone's cursors. */
+.board-canvas.read-only {
+  cursor: default;
 }
 
 .note-editor {

@@ -19,6 +19,8 @@ export interface JoinSnapshot {
   itemsJson: string;
   selfId?: string;
   participants?: unknown;
+  /** Whether this connection may change the board (edit link, not view link). */
+  canEdit?: unknown;
 }
 
 /**
@@ -37,6 +39,7 @@ export interface JoinSnapshot {
 export function useBoardSync(
   roomId: string,
   displayName: string,
+  editKey: string | null,
   handlers: {
     onRemoteAction: (action: RemoteAction) => void;
     onJoined: (snapshot: JoinSnapshot, pending: readonly OutgoingAction[]) => void;
@@ -47,6 +50,9 @@ export function useBoardSync(
   const [status, setStatus] = useState<SyncStatus>("connecting");
   const [peers, setPeers] = useState<Peer[]>([]);
   const [selfId, setSelfId] = useState<string | null>(null);
+  // null until the first join answers; kept across reconnects until they do.
+  const [canEdit, setCanEdit] = useState<boolean | null>(null);
+  const [joinError, setJoinError] = useState<string | null>(null);
   // The queue survives a refresh in this tab, so load it before the first paint.
   const [outbox] = useState(() => loadOutbox(sessionStore(), roomId));
   const [pendingCount, setPendingCount] = useState(outbox.size);
@@ -58,6 +64,7 @@ export function useBoardSync(
   const retryTimerRef = useRef<number | null>(null);
   const handlersRef = useRef(handlers);
   const nameRef = useRef(displayName);
+  const canEditRef = useRef<boolean | null>(null);
   // Latest handlers win: remote actions must see current board state.
   // Assigned during render (the standard use-latest pattern); the connection
   // effect below reads through this ref so it never needs to rebuild.
@@ -77,6 +84,9 @@ export function useBoardSync(
    */
   const pump = useCallback(async () => {
     if (pumpingRef.current) return;
+    // View-only connections keep their queue untouched: opening the edit link
+    // in this tab can still flush edits queued while this tab was an editor.
+    if (canEditRef.current !== true) return;
     const conn = connRef.current;
     if (!conn || conn.state !== HubConnectionState.Connected) return;
     pumpingRef.current = true;
@@ -132,12 +142,32 @@ export function useBoardSync(
     // Pending actions are replayed onto that snapshot so a reconnect does not
     // roll back edits the server has not seen yet.
     const join = async () => {
-      const snapshot = await connection.invoke<JoinSnapshot>(
-        "JoinBoard",
-        roomId,
-        nameRef.current,
-      );
+      let snapshot: JoinSnapshot;
+      try {
+        snapshot = await connection.invoke<JoinSnapshot>(
+          "JoinBoard",
+          roomId,
+          nameRef.current,
+          editKey,
+        );
+      } catch (error) {
+        // A bad edit key must be visible, not a silent downgrade to viewing.
+        // A hub rejection means the server refused (so this tab is read-only);
+        // a transport failure leaves permission unknown.
+        if (!cancelled) {
+          setJoinError(hubMessage(error));
+          if (isHubRejection(error)) {
+            canEditRef.current = false;
+            setCanEdit(false);
+          }
+        }
+        throw error;
+      }
       if (cancelled) return;
+      setJoinError(null);
+      const allowed = snapshot.canEdit === true;
+      canEditRef.current = allowed;
+      setCanEdit(allowed);
       setSelfId(typeof snapshot.selfId === "string" ? snapshot.selfId : null);
       setPeers(toRoster(snapshot.participants));
       handlersRef.current.onJoined(snapshot, outbox.all);
@@ -189,9 +219,10 @@ export function useBoardSync(
       void connection.stop();
     };
     // The connection reads handlers through handlersRef, so it must not
-    // rebuild when they change identity each render.
+    // rebuild when they change identity each render. The edit key is part of
+    // identity: it decides whether this connection may write.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId]);
+  }, [roomId, editKey]);
 
   /**
    * Queues one durable action and starts sending. The action is applied to the
@@ -234,6 +265,8 @@ export function useBoardSync(
     status,
     peers,
     selfId,
+    canEdit,
+    joinError,
     send,
     sendCursor,
     sendDragPreview,
@@ -242,6 +275,17 @@ export function useBoardSync(
     lastSavedAt,
     saveFailed,
   };
+}
+
+/** SignalR wraps a HubException as "… HubException: <message>". */
+function isHubRejection(error: unknown): boolean {
+  return error instanceof Error && /HubException:/.test(error.message);
+}
+
+function hubMessage(error: unknown): string {
+  if (!(error instanceof Error) || !error.message) return "Could not join the board.";
+  const wrapped = error.message.match(/HubException:\s*([\s\S]+)$/);
+  return wrapped ? wrapped[1].trim() : error.message;
 }
 
 /** Session storage can be unavailable (sandboxed frames, private mode). */

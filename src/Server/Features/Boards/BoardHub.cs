@@ -26,21 +26,32 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
     private static readonly object SeenLock = new();
     private static readonly Dictionary<string, HashSet<string>> SeenActions = new();
 
-    /// <summary>Join result: current items, the caller's id, and the room roster.</summary>
-    public async Task<JoinResult> JoinBoard(string boardId, string? displayName)
+    /// <summary>
+    /// Join result: current items, the caller's id, the roster, and whether the
+    /// connection may change the board. The view link joins read-only; editing
+    /// needs the key from the edit link.
+    /// </summary>
+    public async Task<JoinResult> JoinBoard(string boardId, string? displayName, string? editKey)
     {
         if (!BoardIds.IsValid(boardId))
             throw new HubException("Board id must be 12 lowercase letters/digits.");
-        if (!await db.Boards.AnyAsync(b => b.Id == boardId))
-            throw new HubException("No board with that link.");
-
-        await Groups.AddToGroupAsync(Context.ConnectionId, Room(boardId));
-        Presence.Join(boardId, Context.ConnectionId, displayName);
-        await BroadcastRosterAsync(boardId);
 
         var row = await db.Boards.FindAsync([boardId]);
+        if (row is null) throw new HubException("No board with that link.");
+
+        var access = BoardAccess.CheckEditKey(row, editKey);
+        // A link that carries a bad key is an error rather than a silent
+        // downgrade to viewing, so a truncated/edited link is obvious.
+        if (access is BoardEditAccess.Invalid)
+            throw new HubException("That edit link is not valid.");
+        var canEdit = access is BoardEditAccess.LegacyOpen or BoardEditAccess.Granted;
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, Room(boardId));
+        Presence.Join(boardId, Context.ConnectionId, displayName, canEdit);
+        await BroadcastRosterAsync(boardId);
+
         return new JoinResult(
-            BoardDto.From(row!).Items.GetRawText(), Context.ConnectionId, RosterDto(boardId));
+            row.ItemsJson, Context.ConnectionId, RosterDto(boardId), canEdit);
     }
 
     /// <summary>
@@ -57,16 +68,22 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
     /// <summary>Applies one action; returns the save timestamp as the ack.</summary>
     public async Task<DateTimeOffset> SendAction(BoardActionEnvelope envelope)
     {
-        var gate = await Locks.GetOrAdd(envelope.BoardId, _ => new SemaphoreSlim(1, 1))
+        var membership = Presence.Find(Context.ConnectionId)
+            ?? throw new HubException("Join a board before sending actions.");
+        if (!membership.Participant.CanEdit)
+            throw new HubException("This board is view-only; open its edit link to make changes.");
+
+        var boardId = membership.BoardId;
+        var gate = await Locks.GetOrAdd(boardId, _ => new SemaphoreSlim(1, 1))
             .WaitAsync(TimeSpan.FromSeconds(10));
         if (!gate) throw new HubException("Server is busy; retry the action.");
         try
         {
-            return await ApplyAsync(envelope);
+            return await ApplyAsync(envelope, boardId);
         }
         finally
         {
-            Locks[envelope.BoardId].Release();
+            Locks[boardId].Release();
         }
     }
 
@@ -110,30 +127,27 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
         });
     }
 
-    private async Task<DateTimeOffset> ApplyAsync(BoardActionEnvelope envelope)
+    private async Task<DateTimeOffset> ApplyAsync(BoardActionEnvelope envelope, string boardId)
     {
-        var check = BoardActionValidator.Validate(
-            Presence.Find(Context.ConnectionId)?.BoardId
-                ?? throw new HubException("Join a board before sending actions."),
-            envelope);
+        var check = BoardActionValidator.Validate(boardId, envelope);
         if (!check.IsSuccess) throw new HubException(check.Error!);
 
         bool duplicate;
         lock (SeenLock)
         {
-            if (!SeenActions.TryGetValue(envelope.BoardId, out var seen))
-                SeenActions[envelope.BoardId] = seen = [];
+            if (!SeenActions.TryGetValue(boardId, out var seen))
+                SeenActions[boardId] = seen = [];
             duplicate = !seen.Add(envelope.ActionId);
             if (!duplicate && seen.Count > 5000) seen.Clear(); // bounded memory; refresh heals gaps
         }
         if (duplicate)
         {
             // Redelivery: already applied — ack with the current save time.
-            return await db.Boards.Where(b => b.Id == envelope.BoardId)
+            return await db.Boards.Where(b => b.Id == boardId)
                 .Select(b => b.UpdatedAt).FirstOrDefaultAsync();
         }
 
-        var row = await db.Boards.FindAsync([envelope.BoardId]);
+        var row = await db.Boards.FindAsync([boardId]);
         if (row is null) throw new HubException("Board no longer exists.");
         JsonArray items;
         try
@@ -148,7 +162,7 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
         row.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync();
 
-        await Clients.OthersInGroup(Room(envelope.BoardId)).SendAsync("ReceiveAction", new
+        await Clients.OthersInGroup(Room(boardId)).SendAsync("ReceiveAction", new
         {
             actionId = envelope.ActionId,
             type = check.Value!.Type,
@@ -181,5 +195,6 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
 
     private static string Room(string boardId) => $"board:{boardId}";
 
-    public sealed record JoinResult(string ItemsJson, string SelfId, object[] Participants);
+    public sealed record JoinResult(
+        string ItemsJson, string SelfId, object[] Participants, bool CanEdit);
 }

@@ -44,6 +44,7 @@ export default function BoardView({
   onNoteEdit,
   onDeleteItem,
   showEmptyHint,
+  readOnly = false,
 }: {
   board: Board;
   tool: Tool;
@@ -60,6 +61,8 @@ export default function BoardView({
   onNoteMoveEnd: (id: string, startX: number, startY: number) => void;
   onNoteEdit: (id: string, text: string) => void;
   onDeleteItem: (id: string) => void;
+  /** View link: still shows peers' cursors, but never edits. */
+  readOnly?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef<{ id: string; points: Point[] } | null>(null);
@@ -198,6 +201,7 @@ export default function BoardView({
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
+    if (readOnly) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
     if (tool === "eraser") {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -238,7 +242,9 @@ export default function BoardView({
 
   const onPointerMove = (e: React.PointerEvent) => {
     const p = eventPoint(e);
+    // Presence still flows from a view-only tab; drawing does not.
     if (p) onPointerMovePos?.(p);
+    if (readOnly) return;
     if (tool === "eraser") {
       if (e.buttons === 0) return;
       if (p) eraseAt(p);
@@ -280,6 +286,7 @@ export default function BoardView({
   };
 
   const onDoubleClick = (e: React.MouseEvent) => {
+    if (readOnly) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -292,7 +299,7 @@ export default function BoardView({
   };
 
   const commitEdit = () => {
-    if (!editing) return;
+    if (readOnly || !editing) return;
     const draft = editing.draft.slice(0, 2000);
     const id = editing.id;
     setEditing(null);
@@ -305,7 +312,7 @@ export default function BoardView({
     <div className="board-wrap">
       <canvas
         ref={canvasRef}
-        className={`board-canvas tool-${tool}`}
+        className={`board-canvas tool-${tool}${readOnly ? " read-only" : ""}`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -317,8 +324,17 @@ export default function BoardView({
       />
       {showEmptyHint && (
         <div className="empty-hint" aria-hidden>
-          <p>Pick the pen and draw — or drop a note.</p>
-          <p>Share the link to draw together.</p>
+          {readOnly ? (
+            <>
+              <p>No one has drawn here yet.</p>
+              <p>Ask for the edit link to start the board.</p>
+            </>
+          ) : (
+            <>
+              <p>Pick the pen and draw — or drop a note.</p>
+              <p>Share the edit link to draw together.</p>
+            </>
+          )}
         </div>
       )}
       {editing && (

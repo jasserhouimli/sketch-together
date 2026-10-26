@@ -9,7 +9,13 @@ export class BoardApiError extends Error {
   }
 }
 
-export async function createBoard(): Promise<string> {
+export interface CreatedBoard {
+  id: string;
+  /** The only copy of the editing secret; it lives in the edit link. */
+  editKey: string;
+}
+
+export async function createBoard(): Promise<CreatedBoard> {
   let res: Response;
   try {
     res = await fetch("/api/boards", { method: "POST" });
@@ -17,11 +23,16 @@ export async function createBoard(): Promise<string> {
     throw new BoardApiError("Could not reach the server.", "network");
   }
   if (!res.ok) throw new BoardApiError("Could not create a board.", "server");
-  const body = (await res.json()) as { id?: unknown };
+  const body = (await res.json()) as { id?: unknown; editKey?: unknown };
   if (typeof body.id !== "string" || body.id.length === 0) {
     throw new BoardApiError("Server returned an unusable board.", "server");
   }
-  return body.id;
+  // Be permissive about the key's shape (the server owns it) but never treat a
+  // missing or obviously malformed key as an edit link.
+  if (typeof body.editKey !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.editKey)) {
+    throw new BoardApiError("Server returned an unusable board.", "server");
+  }
+  return { id: body.id, editKey: body.editKey };
 }
 
 export async function fetchBoard(id: string): Promise<Board> {

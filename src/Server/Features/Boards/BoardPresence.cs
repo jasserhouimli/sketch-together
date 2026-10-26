@@ -2,8 +2,12 @@ using System.Text;
 
 namespace SketchTogether.Server.Features.Boards;
 
-/// <summary>One participant per live connection: display name plus cursor colour.</summary>
-public sealed record Participant(string ConnectionId, string Name, string Color);
+/// <summary>
+/// One participant per live connection: display name, cursor colour, and the
+/// edit permission established at join. Permission is per connection, so a
+/// reconnect re-checks the edit key.
+/// </summary>
+public sealed record Participant(string ConnectionId, string Name, string Color, bool CanEdit);
 
 /// <summary>Which board a connection is in, with its participant record.</summary>
 public sealed record Membership(string BoardId, Participant Participant);
@@ -31,10 +35,10 @@ public sealed class BoardPresence
     private readonly Dictionary<string, string> _boardByConnection = new(StringComparer.Ordinal);
 
     /// <summary>Adds (or re-adds) a connection and returns its participant record.</summary>
-    public Participant Join(string boardId, string connectionId, string? requestedName)
+    public Participant Join(string boardId, string connectionId, string? requestedName, bool canEdit)
     {
         var participant = new Participant(
-            connectionId, SanitizeName(requestedName), ColorFor(connectionId));
+            connectionId, SanitizeName(requestedName), ColorFor(connectionId), canEdit);
         lock (_gate)
         {
             RemoveLocked(connectionId);

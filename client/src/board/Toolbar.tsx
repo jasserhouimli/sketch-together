@@ -29,7 +29,9 @@ export default function Toolbar({
   onRedo,
   canUndo,
   canRedo,
+  readOnly,
 }: {
+  readOnly: boolean;
   tool: Tool;
   color: string;
   width: number;
@@ -83,9 +85,10 @@ export default function Toolbar({
       type="button"
       aria-pressed={tool === t}
       aria-label={`${label} tool`}
-      title={`${label} (${key})`}
+      title={readOnly ? "View only" : `${label} (${key})`}
       className={`tool-btn${tool === t ? " selected" : ""}`}
       onClick={() => onToolChange(t)}
+      disabled={readOnly}
     >
       {icon}
     </button>
@@ -138,6 +141,7 @@ export default function Toolbar({
                   className={`swatch${color === c ? " selected" : ""}`}
                   style={{ backgroundColor: c }}
                   onClick={() => onColorChange(c)}
+                  disabled={readOnly}
                 />
               ))}
             </div>
@@ -151,6 +155,7 @@ export default function Toolbar({
                   aria-label={`Width ${w}`}
                   className={`width-btn${width === w ? " selected" : ""}`}
                   onClick={() => onWidthChange(w)}
+                  disabled={readOnly}
                 >
                   <span style={{ height: w }} />
                 </button>
@@ -170,6 +175,7 @@ export default function Toolbar({
                 className={`swatch${noteColor === c ? " selected" : ""}`}
                 style={{ backgroundColor: c }}
                 onClick={() => onNoteColorChange(c)}
+                disabled={readOnly}
               />
             ))}
           </div>
@@ -179,10 +185,13 @@ export default function Toolbar({
           className={`clear-btn${armed ? " clear-btn-armed" : ""}`}
           onClick={handleClear}
           onBlur={disarm}
+          disabled={readOnly}
           title={
-            armed
-              ? "Click again to clear the board for everyone"
-              : "Remove every item from the board"
+            readOnly
+              ? "View only: open the edit link to change the board"
+              : armed
+                ? "Click again to clear the board for everyone"
+                : "Remove every item from the board"
           }
           aria-label={armed ? "Confirm clearing the board" : "Clear the board"}
         >
@@ -193,7 +202,7 @@ export default function Toolbar({
             type="button"
             className="tool-btn"
             onClick={onUndo}
-            disabled={!canUndo}
+            disabled={readOnly || !canUndo}
             title="Undo (Ctrl+Z)"
             aria-label="Undo"
           >
@@ -203,7 +212,7 @@ export default function Toolbar({
             type="button"
             className="tool-btn"
             onClick={onRedo}
-            disabled={!canRedo}
+            disabled={readOnly || !canRedo}
             title="Redo (Ctrl+Y)"
             aria-label="Redo"
           >

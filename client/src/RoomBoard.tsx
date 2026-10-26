@@ -6,7 +6,7 @@ import { DEFAULT_NOTE_COLOR } from "./board/notes";
 import type { Tool } from "./board/tools";
 import type { Point } from "./board/types";
 import { BoardApiError, fetchBoard } from "./room/api";
-import { roomUrl } from "./room/route";
+import { editRoomUrl, roomUrl } from "./room/route";
 import { EditHistory } from "./board/history";
 import { resolveDisplayName, sanitizeName, setStoredName, DISPLAY_NAME_MAX, type Peer } from "./room/presence";
 import { createThrottle } from "./room/throttle";
@@ -69,14 +69,24 @@ function sessionStore(): Storage | null {
   }
 }
 
-/** A shared room: loads once, edits live over SignalR, shows sync status. */
-export default function RoomBoard({ roomId }: { roomId: string }) {
+/**
+ * A shared room: loads once, edits live over SignalR, shows sync status. The
+ * edit key (when present) decides whether this tab may change the board; the
+ * server enforces the same rule, so the UI is a convenience, not the boundary.
+ */
+export default function RoomBoard({
+  roomId,
+  editKey,
+}: {
+  roomId: string;
+  editKey: string | null;
+}) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [tool, setTool] = useState<Tool>("pen");
   const [color, setColor] = useState<string>(DEFAULT_COLOR);
   const [width, setWidth] = useState<number>(DEFAULT_WIDTH);
   const [noteColor, setNoteColor] = useState<string>(DEFAULT_NOTE_COLOR);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"view" | "edit" | null>(null);
   const [toolsOpen, setToolsOpen] = useState(true);
   const [histState, setHistState] = useState({ undo: false, redo: false });
   // Names are cosmetic and per tab; the server sanitizes whatever we send.
@@ -181,9 +191,12 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
       }
       let items = (Array.isArray(parsed) ? parsed.filter(isValidItem) : []) as BoardItem[];
       // Replay edits the server has not acknowledged yet, so a reconnect does
-      // not roll them back before the outbox flushes.
-      for (const action of pending) {
-        items = applyAction(items, action) ?? items;
+      // not roll them back before the outbox flushes. A view-only join keeps
+      // the queue but must not paint edits that will never be saved.
+      if (snapshot.canEdit === true) {
+        for (const action of pending) {
+          items = applyAction(items, action) ?? items;
+        }
       }
       snapshotSeenRef.current = true;
       setItems(items);
@@ -212,6 +225,8 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     status,
     peers,
     selfId,
+    canEdit,
+    joinError,
     send,
     sendCursor,
     sendDragPreview,
@@ -219,12 +234,15 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     pendingCount,
     lastSavedAt,
     saveFailed,
-  } = useBoardSync(roomId, displayName, {
+  } = useBoardSync(roomId, displayName, editKey, {
     onRemoteAction: applyRemote,
     onJoined: applySnapshot,
     onCursor,
     onPreview,
   });
+
+  // Unknown (still joining) is treated as read-only until the server answers.
+  const editable = canEdit === true;
 
   /** Renames this tab: kept for the session, then announced to the room. */
   const handleRename = (raw: string) => {
@@ -325,6 +343,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
 
   /** Applies one action locally and broadcasts it. */
   const applyLocalAndSend = (type: string, item: unknown) => {
+    if (!editable) return;
     if (type === "item.delete" && typeof (item as { id?: unknown })?.id === "string") {
       const id = (item as { id: string }).id;
       setItems(itemsRef.current.filter((i) => i.id !== id));
@@ -349,6 +368,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
   };
 
   const doUndo = () => {
+    if (!editable) return;
     const entry = edits().popUndo();
     if (!entry) return;
     touchHist();
@@ -356,6 +376,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
   };
 
   const doRedo = () => {
+    if (!editable) return;
     const entry = edits().popRedo();
     if (!entry) return;
     touchHist();
@@ -364,15 +385,19 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
 
   const doUndoRef = useRef(doUndo);
   const doRedoRef = useRef(doRedo);
+  // Keyboard shortcuts fire outside the render cycle; read permission live.
+  const editableRef = useRef(editable);
   useEffect(() => {
     doUndoRef.current = doUndo;
     doRedoRef.current = doRedo;
+    editableRef.current = editable;
   });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
+      if (!editableRef.current) return;
       const key = e.key.toLowerCase();
       if (e.ctrlKey || e.metaKey) {
         if (key === "z" && !e.shiftKey) {
@@ -395,13 +420,14 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const copyLink = async () => {
+  const copyLink = async (which: "view" | "edit") => {
+    const url = which === "edit" && editKey ? editRoomUrl(roomId, editKey) : roomUrl(roomId);
     try {
-      await navigator.clipboard.writeText(roomUrl(roomId));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(url);
+      setCopied(which);
+      setTimeout(() => setCopied(null), 2000);
     } catch {
-      window.prompt("Copy this link:", roomUrl(roomId));
+      window.prompt("Copy this link:", url);
     }
   };
 
@@ -421,7 +447,13 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
 
   return (
     <main className={`app${toolsOpen ? " tools-open" : ""}`}>
+      {joinError && (
+        <p className="room-error" role="alert">
+          {joinError}
+        </p>
+      )}
       <Toolbar
+        readOnly={!editable}
         tool={tool}
         color={color}
         width={width}
@@ -433,6 +465,7 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
         onWidthChange={setWidth}
         onNoteColorChange={setNoteColor}
         onClear={() => {
+          if (!editable) return;
           // Clearing is not undoable in v1 (it would need a multi-action).
           setItems([]);
           send("board.clear", {});
@@ -444,18 +477,35 @@ export default function RoomBoard({ roomId }: { roomId: string }) {
       />
       <div className="room-info">
         <PeerChips peers={peers} selfId={selfId} onRename={handleRename} />
-        <button type="button" className="clear-btn" onClick={copyLink}>
-          {copied ? "Copied!" : "Copy link"}
+        {canEdit === false && (
+          <span
+            className="status-pill"
+            role="status"
+            title="This is the view link. Open the edit link to change the board."
+          >
+            View only
+          </span>
+        )}
+        <button type="button" className="clear-btn" onClick={() => copyLink("view")}>
+          {copied === "view" ? "Copied!" : "Copy view link"}
         </button>
-        <StatusPill status={status} participants={participants} />
-        <SaveState
-          pending={pendingCount}
-          offline={status !== "live"}
-          failed={saveFailed}
-          at={lastSavedAt}
-        />
+        {editable && editKey && (
+          <button type="button" className="clear-btn" onClick={() => copyLink("edit")}>
+            {copied === "edit" ? "Copied!" : "Copy edit link"}
+          </button>
+        )}
+        <StatusPill status={status} participants={participants} readOnly={canEdit === false} />
+        {canEdit !== false && (
+          <SaveState
+            pending={pendingCount}
+            offline={status !== "live"}
+            failed={saveFailed}
+            at={lastSavedAt}
+          />
+        )}
       </div>
       <BoardView
+        readOnly={!editable}
         board={state.board}
         tool={tool}
         color={color}
@@ -624,7 +674,15 @@ function PeerChips({
   );
 }
 
-function StatusPill({ status, participants }: { status: SyncStatus; participants: number }) {
+function StatusPill({
+  status,
+  participants,
+  readOnly,
+}: {
+  status: SyncStatus;
+  participants: number;
+  readOnly: boolean;
+}) {
   const label =
     status === "live"
       ? `Live · ${participants}`
@@ -636,7 +694,9 @@ function StatusPill({ status, participants }: { status: SyncStatus; participants
   const title =
     status === "live"
       ? `${participants} participant${participants === 1 ? "" : "s"} connected`
-      : "Edits stay on this device until the connection returns";
+      : readOnly
+        ? "The board will catch up when the connection returns"
+        : "Edits stay on this device until the connection returns";
   return (
     <span className={`status-pill status-${status}`} title={title} role="status">
       <span className="status-dot" aria-hidden />

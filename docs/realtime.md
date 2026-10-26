@@ -66,9 +66,10 @@ follow the pointer exactly.
 
 ## Presence
 
-`JoinBoard(boardId, displayName)` registers the connection in an in-memory
-presence table and returns the current items, the caller's connection id, and
-the roster. `PresenceChanged` re-broadcasts the roster on join and disconnect.
+`JoinBoard(boardId, displayName, editKey)` registers the connection in an
+in-memory presence table and returns the current items, the caller's connection
+id, the roster, and `canEdit`. `PresenceChanged` re-broadcasts the roster on
+join and disconnect.
 `Rename(displayName)` replaces the caller's name in place — same connection,
 colour, and roster position — and re-broadcasts. It is ephemeral like the rest of
 presence: nothing is written to the board row, so a rename never costs a save.
@@ -80,6 +81,28 @@ Names are cosmetic: there are no accounts. The server trims, strips control
 characters, collapses whitespace, and caps a name at 24 characters, falling back
 to `Guest`. The client sanitizes again before rendering, because the roster is
 still just network input.
+
+## Editing permission
+
+`JoinBoard` checks the optional edit key against the hash stored on the board
+(`BoardAccess.CheckEditKey`):
+
+- no stored hash (a board created before edit links) — editing stays open to
+  anyone with the board id;
+- a matching key — `canEdit = true`;
+- no key — view-only (`canEdit = false`);
+- a wrong key — the join is rejected instead of silently downgraded.
+
+Permission is per connection and kept in the presence record, so a reconnect
+re-checks it. `SendAction` refuses durable actions from a view-only connection.
+Cursors, drag previews, renames, and roster broadcasts remain available to
+everyone: they are presence, not board state. The server never sends the key or
+its hash back to a client.
+
+Read-only mode in the client is a convenience layered on that rule: the canvas
+and toolbar stop editing, the empty hint explains why, and a queued offline edit
+is replayed only when the join granted edit permission. A rejected edit key is
+reported as an error rather than quietly turning the tab into a viewer.
 
 ## Client layers
 
@@ -99,4 +122,5 @@ leaves, or when they expire — whichever comes first.
 Ordering is per board and comes from one lock; it is not a CRDT, and concurrent
 edits to the same note resolve last-writer-wins. Ephemeral updates are best
 effort: nothing is queued, so a dropped cursor frame stays dropped. Boards are
-public to anyone with the link.
+readable by anyone with the view link; possession of the edit key is the only
+authorization. There are no accounts, key rotation, or expiry.
