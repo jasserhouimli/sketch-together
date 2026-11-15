@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Boards.Domain;
 
-/// <summary>How a presented edit key relates to a board.</summary>
+/// <summary>
+/// How a presented edit key relates to a board.
+/// </summary>
 public enum BoardEditAccess
 {
     /// <summary>The board predates edit links and stays open to the link holder.</summary>
@@ -27,6 +29,10 @@ public enum BoardEditAccess
 /// </summary>
 public static class BoardAccess
 {
+    public const int EditKeyBytes = 32;
+    public const int EditKeyLength = EditKeyBytes * 2;
+    public const int HashLength = 64;
+
     /// <summary>Classifies a join attempt without exposing why a key failed.</summary>
     public static BoardEditAccess CheckEditKey(Board board, string? presentedKey)
     {
@@ -36,14 +42,6 @@ public static class BoardAccess
             ? BoardEditAccess.Granted
             : BoardEditAccess.Invalid;
     }
-
-    /// <summary>256 bits of entropy, rendered as lowercase hex.</summary>
-    public const int EditKeyBytes = 32;
-
-    public const int EditKeyLength = EditKeyBytes * 2;
-
-    /// <summary>SHA-256 as lowercase hex.</summary>
-    public const int HashLength = 64;
 
     public static string GenerateEditKey() =>
         Convert.ToHexString(RandomNumberGenerator.GetBytes(EditKeyBytes)).ToLowerInvariant();

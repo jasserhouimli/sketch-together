@@ -1,0 +1,10 @@
+global using Xunit;
+global using SketchTogether.Server.Common.Results;
+global using SketchTogether.Server.Modules.Boards.Domain;
+global using SketchTogether.Server.Modules.Boards.Infrastructure;
+global using SketchTogether.Server.Modules.Boards.Features.CreateBoard;
+global using SketchTogether.Server.Modules.Boards.Features.GetBoard;
+global using SketchTogether.Server.Modules.Collaboration.Contracts;
+global using SketchTogether.Server.Modules.Collaboration.Domain;
+global using SketchTogether.Server.Modules.Collaboration.Hubs;
+global using SketchTogether.Server.Modules.Collaboration.Services;

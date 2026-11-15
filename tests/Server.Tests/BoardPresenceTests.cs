@@ -1,4 +1,3 @@
-using SketchTogether.Server.Features.Boards;
 
 namespace Server.Tests;
 

@@ -1,13 +1,14 @@
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Boards.Domain;
 
-/// <summary>Board room row. Items are stored as a JSON array (see client board model).</summary>
+/// <summary>
+/// Board room aggregate entity. Items are stored as a serialized JSON array.
+/// </summary>
 public sealed class Board
 {
     public string Id { get; set; } = string.Empty;
 
     /// <summary>
-    /// SHA-256 hex of the edit key, or null for a board created before edit
-    /// links (those remain open, because no key was ever issued).
+    /// SHA-256 hex of the edit key, or null for legacy boards created before edit links.
     /// </summary>
     public string? EditKeyHash { get; set; }
 

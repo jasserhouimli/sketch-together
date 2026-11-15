@@ -1,6 +1,7 @@
 using System.Text.Json;
+using SketchTogether.Server.Modules.Boards.Domain;
 
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Boards.Features.GetBoard;
 
 /// <summary>Wire shape for GET /api/boards/{id}. Corrupt rows read as empty, never 500.</summary>
 public sealed record BoardDto(string Id, JsonElement Items, DateTimeOffset UpdatedAt)

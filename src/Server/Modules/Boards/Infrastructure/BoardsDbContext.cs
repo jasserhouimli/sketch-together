@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using SketchTogether.Server.Modules.Boards.Domain;
 
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Boards.Infrastructure;
 
 public sealed class BoardsDbContext(DbContextOptions<BoardsDbContext> options) : DbContext(options)
 {

@@ -1,46 +1,36 @@
-using Microsoft.EntityFrameworkCore;
-using SketchTogether.Server.Features.Boards;
+using SketchTogether.Server.Common.Endpoints;
+using SketchTogether.Server.Modules.Boards;
+using SketchTogether.Server.Modules.Collaboration;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddDbContext<BoardsDbContext>(o =>
-    o.UseSqlite(builder.Configuration.GetConnectionString("Boards") ?? "Data Source=boards.db"));
-builder.Services.AddSignalR();
+
+// Register Core Infrastructure & Modules
+builder.Services.AddEndpoints();
+builder.Services.AddBoardsModule(builder.Configuration);
+builder.Services.AddCollaborationModule();
+
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<BoardsDbContext>();
-    db.Database.EnsureCreated();
-    BoardSchema.EnsureEditKeyColumn(db);
-}
-// health check
-app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTimeOffset.UtcNow }));
+// Static file hosting for production SPA
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
-app.MapPost("/api/boards", async (BoardsDbContext db, CancellationToken ct) =>
-{
-    // The key is returned once, in the create response. Only its hash is
-    // stored, so the edit link cannot be recovered from the database.
-    var editKey = BoardAccess.GenerateEditKey();
-    var board = new Board
-    {
-        Id = BoardIds.Generate(),
-        EditKeyHash = BoardAccess.HashEditKey(editKey),
-    };
-    db.Boards.Add(board);
-    await db.SaveChangesAsync(ct);
-    return Results.Created($"/api/boards/{board.Id}", new { board.Id, editKey });
-});
+// Database schema initialization
+app.UseBoardsModule();
 
-app.MapGet("/api/boards/{id}", async (string id, BoardsDbContext db, CancellationToken ct) =>
-{
-    if (!BoardIds.IsValid(id))
-        return Results.BadRequest(new { error = "Board id must be 12 lowercase letters/digits." });
-    var row = await db.Boards.FindAsync([id], ct);
-    if (row is null)
-        return Results.NotFound(new { error = "No board with that link. Check the URL or create a new board." });
-    return Results.Ok(BoardDto.From(row));
-});
+// System Health Check
+app.MapGet("/health", () => Results.Ok(new { status = "ok", time = DateTimeOffset.UtcNow }))
+   .WithName("HealthCheck")
+   .WithTags("System");
 
-app.MapHub<BoardHub>("/hubs/board");
+// Map Minimal API Vertical Slices & SignalR Hubs
+app.MapEndpoints();
+app.MapCollaborationModule();
+
+// SPA fallback
+app.MapFallbackToFile("index.html");
 
 app.Run();
+
+// For WebApplicationFactory integration tests
+public partial class Program { }

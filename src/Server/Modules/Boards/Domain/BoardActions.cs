@@ -1,6 +1,7 @@
 using System.Text.Json;
+using SketchTogether.Server.Common.Results;
 
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Boards.Domain;
 
 /// <summary>
 /// Wire envelope for every board mutation. The server orders accepted actions;
@@ -23,7 +24,9 @@ public static class BoardActionTypes
     ];
 }
 
-/// <summary>Shape-checked action ready to apply. Item stays a JsonElement so the hub can persist it verbatim.</summary>
+/// <summary>
+/// Shape-checked action ready to apply. Item stays a JsonElement so the hub can persist it verbatim.
+/// </summary>
 public sealed record ValidatedAction(string Type, string? ItemId, JsonElement Item);
 
 public static class BoardActionValidator
@@ -85,7 +88,6 @@ public static class BoardActionValidator
 
     private static Result<ValidatedAction> ValidateMove(JsonElement item)
     {
-        // item.move carries only { id, x, y }; the stored item keeps its shape.
         if (item.ValueKind != JsonValueKind.Object)
             return Fail("item.move needs { id, x, y }.");
         if (!TryGet(item, "id", out var id) || string.IsNullOrWhiteSpace(id))
@@ -143,22 +145,4 @@ public static class BoardValues
         && value.Skip(1).All(c => char.IsAsciiHexDigit(c));
 
     public static bool IsUnit(double value) => value >= 0 && value <= 1;
-}
-
-/// <summary>Minimal Result without a shared-kernel dependency (one slice so far).</summary>
-public sealed class Result<T>
-{
-    private Result(bool success, T? value, string? error)
-    {
-        IsSuccess = success;
-        Value = value;
-        Error = error;
-    }
-
-    public bool IsSuccess { get; }
-    public T? Value { get; }
-    public string? Error { get; }
-
-    public static Result<T> Ok(T value) => new(true, value, null);
-    public static Result<T> Fail(string error) => new(false, default, error);
 }

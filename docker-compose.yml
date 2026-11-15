@@ -1,0 +1,16 @@
+services:
+  sketch-together:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5248:5248"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__Boards=Data Source=/data/boards.db
+    volumes:
+      - board-data:/data
+    restart: unless-stopped
+
+volumes:
+  board-data:

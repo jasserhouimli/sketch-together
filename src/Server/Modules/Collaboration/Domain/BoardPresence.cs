@@ -1,6 +1,7 @@
 using System.Text;
+using SketchTogether.Server.Modules.Collaboration.Contracts;
 
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Collaboration.Domain;
 
 /// <summary>
 /// One participant per live connection: display name, cursor colour, and the
@@ -15,10 +16,9 @@ public sealed record Membership(string BoardId, Participant Participant);
 /// <summary>
 /// Ephemeral presence for live rooms: who is connected, their display name and
 /// cursor colour. Nothing here is persisted — a restart drops presence and every
-/// client re-joins. There are no accounts, so names arrive from the client and
-/// are sanitized before they are stored or broadcast.
+/// client re-joins.
 /// </summary>
-public sealed class BoardPresence
+public sealed class BoardPresence : IBoardPresenceTracker
 {
     public const int MaxNameLength = 24;
     public const string FallbackName = "Guest";
@@ -34,7 +34,6 @@ public sealed class BoardPresence
     private readonly Dictionary<string, List<Participant>> _rooms = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _boardByConnection = new(StringComparer.Ordinal);
 
-    /// <summary>Adds (or re-adds) a connection and returns its participant record.</summary>
     public Participant Join(string boardId, string connectionId, string? requestedName, bool canEdit)
     {
         var participant = new Participant(
@@ -50,10 +49,6 @@ public sealed class BoardPresence
         return participant;
     }
 
-    /// <summary>
-    /// Replaces a connection's display name in place, keeping its colour and
-    /// roster position. Returns the board it is in, or null if it is not known.
-    /// </summary>
     public string? Rename(string connectionId, string? requestedName)
     {
         lock (_gate)
@@ -67,7 +62,6 @@ public sealed class BoardPresence
         }
     }
 
-    /// <summary>Drops a connection; returns the board it was in, or null if unknown.</summary>
     public string? Leave(string connectionId)
     {
         lock (_gate)
@@ -78,7 +72,6 @@ public sealed class BoardPresence
         }
     }
 
-    /// <summary>The board and participant for a connection, or null when not in a room.</summary>
     public Membership? Find(string connectionId)
     {
         lock (_gate)
@@ -90,7 +83,6 @@ public sealed class BoardPresence
         }
     }
 
-    /// <summary>Participants of a board in join order.</summary>
     public IReadOnlyList<Participant> Roster(string boardId)
     {
         lock (_gate)
@@ -99,7 +91,6 @@ public sealed class BoardPresence
         }
     }
 
-    /// <summary>Trimmed, control-character-free, length-capped display name.</summary>
     public static string SanitizeName(string? requested)
     {
         if (string.IsNullOrWhiteSpace(requested)) return FallbackName;
@@ -125,10 +116,6 @@ public sealed class BoardPresence
         return name.Length == 0 ? FallbackName : name;
     }
 
-    /// <summary>
-    /// Stable colour for a connection. FNV-1a rather than string.GetHashCode so
-    /// the assignment does not change between processes.
-    /// </summary>
     public static string ColorFor(string connectionId)
     {
         var hash = 2166136261u;

@@ -1,6 +1,5 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using SketchTogether.Server.Features.Boards;
 
 namespace Server.Tests;
 

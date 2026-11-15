@@ -1,32 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import BoardView from "./board/BoardView";
 import Toolbar from "./board/Toolbar";
 import { DEFAULT_COLOR, DEFAULT_WIDTH } from "./board/pen";
 import { DEFAULT_NOTE_COLOR } from "./board/notes";
 import type { Tool } from "./board/tools";
-import type { Point } from "./board/types";
 import { BoardApiError, fetchBoard } from "./room/api";
 import { editRoomUrl, roomUrl } from "./room/route";
-import { statusLabel, statusTitle } from "./room/status";
 import { EditHistory } from "./board/history";
-import { resolveDisplayName, sanitizeName, setStoredName, DISPLAY_NAME_MAX, type Peer } from "./room/presence";
-import { createThrottle } from "./room/throttle";
-import {
-  dropPreview,
-  isCursorUpdate,
-  isPreviewUpdate,
-  keepPreviewsFrom,
-  pruneCursors,
-  prunePreviews,
-  retargetPreview,
-  toCursor,
-  toPreview,
-  upsertCursor,
-  upsertPreview,
-  type DragPreview,
-  type RemoteCursor,
-} from "./room/transient";
-import { useBoardSync, type JoinSnapshot, type RemoteAction, type SyncStatus } from "./room/sync";
+import { resolveDisplayName, sanitizeName, setStoredName } from "./room/presence";
+import { useBoardSync, type JoinSnapshot, type RemoteAction } from "./room/sync";
 import { applyAction } from "./board/applyAction";
 import type { OutgoingAction } from "./room/outbox";
 import {
@@ -37,31 +19,17 @@ import {
   type BoardItem,
   type NoteItem,
 } from "./board/types";
-
-/** Cursor updates are cheap but frequent; ~25/s looks smooth to a peer. */
-const CURSOR_SEND_MS = 40;
-/** Drag previews can be coarser: the release sends the exact position. */
-const PREVIEW_SEND_MS = 60;
-/** How often expired cursors/previews are swept out of state. */
-const PRUNE_INTERVAL_MS = 500;
-/**
- * A committed note move aims the peer's ghost at the final position; this is
- * how long it is given to glide there before the preview is dropped.
- */
-const MOVE_SETTLE_MS = 260;
-
-/** Bare-key tool switches, ignored while typing. */
-const TOOL_SHORTCUTS: Record<string, Tool> = { p: "pen", n: "note", e: "eraser" };
-
-const NO_CURSORS: ReadonlyMap<string, RemoteCursor> = new Map();
-const NO_PREVIEWS: ReadonlyMap<string, DragPreview> = new Map();
+import { PeerChips } from "./room/components/PeerChips";
+import { StatusPill } from "./room/components/StatusPill";
+import { SaveState } from "./room/components/SaveState";
+import { useShortcuts } from "./room/hooks/useShortcuts";
+import { useTransientPresence } from "./room/hooks/useTransientPresence";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; board: Board };
 
-/** Session storage can be unavailable (sandboxed frames, private mode). */
 function sessionStore(): Storage | null {
   try {
     return window.sessionStorage;
@@ -71,9 +39,7 @@ function sessionStore(): Storage | null {
 }
 
 /**
- * A shared room: loads once, edits live over SignalR, shows sync status. The
- * edit key (when present) decides whether this tab may change the board; the
- * server enforces the same rule, so the UI is a convenience, not the boundary.
+ * A shared room: loads once, edits live over SignalR, shows sync status.
  */
 export default function RoomBoard({
   roomId,
@@ -90,18 +56,12 @@ export default function RoomBoard({
   const [copied, setCopied] = useState<"view" | "edit" | null>(null);
   const [toolsOpen, setToolsOpen] = useState(true);
   const [histState, setHistState] = useState({ undo: false, redo: false });
-  // Names are cosmetic and per tab; the server sanitizes whatever we send.
   const [displayName, setDisplayName] = useState(() => resolveDisplayName(sessionStore()));
-  const [cursors, setCursors] = useState(NO_CURSORS);
-  const [previews, setPreviews] = useState(NO_PREVIEWS);
+
   const itemsRef = useRef<BoardItem[]>([]);
   const editsRef = useRef<EditHistory | null>(null);
-  // The hub snapshot is newer than the REST load; once it lands, ignore the
-  // slower REST response so it cannot overwrite replayed pending edits.
   const snapshotSeenRef = useRef(false);
 
-  // Session undo: inverses are new actions, so everyone converges. Created
-  // lazily (never during render) and mirrored to state for the buttons.
   const edits = () => {
     if (!editsRef.current) editsRef.current = new EditHistory();
     return editsRef.current;
@@ -117,43 +77,9 @@ export default function RoomBoard({
 
   const touchHist = useCallback(() => {
     setHistState({ undo: edits().canUndo(), redo: edits().canRedo() });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Ghosts that are gliding onto a committed position, keyed by note. The timer
-  // is what finally drops them, so a peer that stops mid-drag still decays.
-  const settleTimers = useRef(new Map<string, number>());
-
-  const cancelPreviewDrop = useCallback((noteId: string) => {
-    const timers = settleTimers.current;
-    const pending = timers.get(noteId);
-    if (pending === undefined) return;
-    window.clearTimeout(pending);
-    timers.delete(noteId);
-  }, []);
-
-  const schedulePreviewDrop = useCallback(
-    (noteId: string) => {
-      cancelPreviewDrop(noteId);
-      const timers = settleTimers.current;
-      timers.set(
-        noteId,
-        window.setTimeout(() => {
-          timers.delete(noteId);
-          setPreviews((prev) => dropPreview(prev, noteId));
-        }, MOVE_SETTLE_MS),
-      );
-    },
-    [cancelPreviewDrop],
-  );
-
-  useEffect(
-    () => () => {
-      for (const timer of settleTimers.current.values()) window.clearTimeout(timer);
-      settleTimers.current.clear();
-    },
-    [],
-  );
+  const retargetRef = useRef<(id: string, p: { x: number; y: number }) => void>(() => {});
 
   const applyRemote = useCallback(
     (action: RemoteAction) => {
@@ -166,19 +92,14 @@ export default function RoomBoard({
           typeof move.x === "number" &&
           typeof move.y === "number"
         ) {
-          const id = move.id;
-          const point = { x: move.x, y: move.y };
-          // The committed position arrives: aim the in-flight ghost at it so it
-          // glides the last few pixels instead of jumping, then let it go.
-          setPreviews((prev) => retargetPreview(prev, id, point, Date.now()));
-          schedulePreviewDrop(id);
+          retargetRef.current(move.id, { x: move.x, y: move.y });
         }
       }
       setItems(next);
       edits().clearRedo();
       touchHist();
     },
-    [setItems, touchHist, schedulePreviewDrop],
+    [setItems, touchHist],
   );
 
   const applySnapshot = useCallback(
@@ -187,13 +108,9 @@ export default function RoomBoard({
       try {
         parsed = JSON.parse(snapshot.itemsJson);
       } catch {
-        // Keep the REST-loaded board; the next refresh heals.
         return;
       }
       let items = (Array.isArray(parsed) ? parsed.filter(isValidItem) : []) as BoardItem[];
-      // Replay edits the server has not acknowledged yet, so a reconnect does
-      // not roll them back before the outbox flushes. A view-only join keeps
-      // the queue but must not paint edits that will never be saved.
       if (snapshot.canEdit === true) {
         for (const action of pending) {
           items = applyAction(items, action) ?? items;
@@ -205,22 +122,8 @@ export default function RoomBoard({
     [setItems],
   );
 
-  const onCursor = useCallback((raw: unknown) => {
-    if (!isCursorUpdate(raw)) return;
-    const now = Date.now();
-    setCursors((prev) => upsertCursor(prev, toCursor(raw, now)));
-  }, []);
-
-  const onPreview = useCallback(
-    (raw: unknown) => {
-      if (!isPreviewUpdate(raw)) return;
-      const now = Date.now();
-      // A fresh gesture supersedes any pending handoff for this note.
-      cancelPreviewDrop(raw.noteId);
-      setPreviews((prev) => upsertPreview(prev, toPreview(raw, now)));
-    },
-    [cancelPreviewDrop],
-  );
+  const cursorHandlerRef = useRef<(raw: unknown) => void>(() => {});
+  const previewHandlerRef = useRef<(raw: unknown) => void>(() => {});
 
   const {
     status,
@@ -238,68 +141,39 @@ export default function RoomBoard({
   } = useBoardSync(roomId, displayName, editKey, {
     onRemoteAction: applyRemote,
     onJoined: applySnapshot,
-    onCursor,
-    onPreview,
+    onCursor: (c) => cursorHandlerRef.current(c),
+    onPreview: (p) => previewHandlerRef.current(p),
   });
 
-  // Unknown (still joining) is treated as read-only until the server answers.
+  const {
+    cursorViews,
+    previewPositions,
+    cursorThrottle,
+    previewThrottle,
+    onCursor,
+    onPreview,
+    handleRetargetPreview,
+  } = useTransientPresence({
+    peers,
+    sendCursor,
+    sendDragPreview,
+  });
+
+  useEffect(() => {
+    cursorHandlerRef.current = onCursor;
+    previewHandlerRef.current = onPreview;
+    retargetRef.current = handleRetargetPreview;
+  }, [onCursor, onPreview, handleRetargetPreview]);
+
   const editable = canEdit === true;
 
-  /** Renames this tab: kept for the session, then announced to the room. */
   const handleRename = (raw: string) => {
-    if (raw.trim().length === 0) return; // a blank edit keeps the current name
+    if (raw.trim().length === 0) return;
     const name = sanitizeName(raw);
     setStoredName(sessionStore(), name);
     setDisplayName(name);
     rename(name);
   };
-
-  const participants = peers.length;
-
-  // A peer that left takes its in-flight previews with it.
-  useEffect(() => {
-    setPreviews((prev) => keepPreviewsFrom(prev, peers));
-  }, [peers]);
-
-  // Sweep expired cursors and previews. Unchanged maps keep their identity, so
-  // a quiet room does not re-render every tick.
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = Date.now();
-      setCursors((prev) => pruneCursors(prev, now));
-      setPreviews((prev) => prunePreviews(prev, now));
-    }, PRUNE_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, []);
-
-  const cursorThrottle = useMemo(
-    () => createThrottle((p: Point) => sendCursor(p.x, p.y), CURSOR_SEND_MS),
-    [sendCursor],
-  );
-  const previewThrottle = useMemo(
-    () =>
-      createThrottle(
-        (p: { noteId: string; x: number; y: number }) => sendDragPreview(p.noteId, p.x, p.y),
-        PREVIEW_SEND_MS,
-      ),
-    [sendDragPreview],
-  );
-  useEffect(
-    () => () => {
-      cursorThrottle.cancel();
-      previewThrottle.cancel();
-    },
-    [cursorThrottle, previewThrottle],
-  );
-
-  const cursorViews = useMemo(
-    () => [...cursors.values()].map((c) => ({ id: c.id, name: c.name, color: c.color, point: c.point })),
-    [cursors],
-  );
-  const previewPositions = useMemo(
-    () => new Map([...previews.values()].map((p) => [p.noteId, p.point] as const)),
-    [previews],
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -339,10 +213,6 @@ export default function RoomBoard({
   const itemById = (id: string): BoardItem | undefined =>
     itemsRef.current.find((i) => i.id === id);
 
-  // Session undo: inverses are new actions, so everyone converges. Board
-  // clears are intentionally not undoable (they would need a multi-action).
-
-  /** Applies one action locally and broadcasts it. */
   const applyLocalAndSend = (type: string, item: unknown) => {
     if (!editable) return;
     if (type === "item.delete" && typeof (item as { id?: unknown })?.id === "string") {
@@ -384,42 +254,12 @@ export default function RoomBoard({
     applyLocalAndSend(entry.redo.type, entry.redo.item);
   };
 
-  const doUndoRef = useRef(doUndo);
-  const doRedoRef = useRef(doRedo);
-  // Keyboard shortcuts fire outside the render cycle; read permission live.
-  const editableRef = useRef(editable);
-  useEffect(() => {
-    doUndoRef.current = doUndo;
-    doRedoRef.current = doRedo;
-    editableRef.current = editable;
+  useShortcuts({
+    editable,
+    onUndo: doUndo,
+    onRedo: doRedo,
+    onSelectTool: setTool,
   });
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
-      if (!editableRef.current) return;
-      const key = e.key.toLowerCase();
-      if (e.ctrlKey || e.metaKey) {
-        if (key === "z" && !e.shiftKey) {
-          e.preventDefault();
-          doUndoRef.current();
-        } else if (key === "y" || (key === "z" && e.shiftKey)) {
-          e.preventDefault();
-          doRedoRef.current();
-        }
-        return;
-      }
-      // Bare keys pick a tool, but never steal a modified shortcut.
-      if (e.altKey || e.shiftKey) return;
-      const shortcut = TOOL_SHORTCUTS[key];
-      if (!shortcut) return;
-      e.preventDefault();
-      setTool(shortcut);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   const copyLink = async (which: "view" | "edit") => {
     const url = which === "edit" && editKey ? editRoomUrl(roomId, editKey) : roomUrl(roomId);
@@ -467,7 +307,6 @@ export default function RoomBoard({
         onNoteColorChange={setNoteColor}
         onClear={() => {
           if (!editable) return;
-          // Clearing is not undoable in v1 (it would need a multi-action).
           setItems([]);
           send("board.clear", {});
         }}
@@ -495,7 +334,7 @@ export default function RoomBoard({
             {copied === "edit" ? "Copied!" : "Copy edit link"}
           </button>
         )}
-        <StatusPill status={status} participants={participants} readOnly={canEdit === false} />
+        <StatusPill status={status} participants={peers.length} readOnly={canEdit === false} />
         {canEdit !== false && (
           <SaveState
             pending={pendingCount}
@@ -582,162 +421,5 @@ export default function RoomBoard({
         }}
       />
     </main>
-  );
-}
-
-/**
- * Who is here, with the same colors their cursors use. Your own chip is the
- * rename control: click it, type, then Enter or click away to keep the name,
- * Escape to drop the edit.
- */
-function PeerChips({
-  peers,
-  selfId,
-  onRename,
-}: {
-  peers: Peer[];
-  selfId: string | null;
-  onRename: (name: string) => void;
-}) {
-  const [draft, setDraft] = useState<string | null>(null);
-  // Enter, Escape and blur can all end the same edit; only the first counts.
-  const finishingRef = useRef(false);
-
-  if (peers.length === 0) return null;
-  const shown = peers.slice(0, 4);
-  const hidden = peers.length - shown.length;
-
-  const startEdit = (name: string) => {
-    finishingRef.current = false;
-    setDraft(name);
-  };
-
-  const finishEdit = (keep: boolean) => {
-    if (finishingRef.current) return;
-    finishingRef.current = true;
-    const value = draft;
-    setDraft(null);
-    if (keep && value !== null) onRename(value);
-  };
-
-  return (
-    <span className="peer-chips" role="list" aria-label="People in this room">
-      {shown.map((peer) => {
-        const you = peer.id === selfId;
-        return (
-          <span
-            key={peer.id}
-            role="listitem"
-            className={`peer-chip${you ? " peer-chip-self" : ""}`}
-            title={you ? `${peer.name} (you) — click to rename` : peer.name}
-          >
-            <span className="peer-dot" style={{ backgroundColor: peer.color }} aria-hidden />
-            {you && draft !== null ? (
-              <input
-                className="peer-name-input"
-                value={draft}
-                autoFocus
-                maxLength={DISPLAY_NAME_MAX}
-                aria-label="Your display name"
-                spellCheck={false}
-                autoComplete="off"
-                onFocus={(e) => e.currentTarget.select()}
-                onChange={(e) => setDraft(e.target.value)}
-                onBlur={() => finishEdit(true)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    finishEdit(true);
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    finishEdit(false);
-                  }
-                }}
-              />
-            ) : you ? (
-              <button
-                type="button"
-                className="peer-name peer-name-edit"
-                onClick={() => startEdit(peer.name)}
-                aria-label={`Change your name (currently ${peer.name})`}
-                title="Change your name"
-              >
-                {peer.name} (you)
-              </button>
-            ) : (
-              <span className="peer-name">{peer.name}</span>
-            )}
-          </span>
-        );
-      })}
-      {hidden > 0 && <span className="peer-chip">+{hidden}</span>}
-    </span>
-  );
-}
-
-function StatusPill({
-  status,
-  participants,
-  readOnly,
-}: {
-  status: SyncStatus;
-  participants: number;
-  readOnly: boolean;
-}) {
-  const label = statusLabel(status, participants);
-  const title = statusTitle(status, participants, readOnly);
-  return (
-    <span className={`status-pill status-${status}`} title={title} role="status">
-      <span className="status-dot" aria-hidden />
-      {label}
-    </span>
-  );
-}
-
-function SaveState({
-  pending,
-  offline,
-  failed,
-  at,
-}: {
-  pending: number;
-  offline: boolean;
-  failed: boolean;
-  at: string | null;
-}) {
-  if (pending > 0) {
-    // Offline edits are queued, not lost: say how many are waiting to sync.
-    return (
-      <span
-        className={`status-pill${offline ? " status-offline" : ""}`}
-        role="status"
-        title={
-          offline
-            ? "Edits stay on this device and sync in order when the connection returns"
-            : "Sending edits to the server"
-        }
-      >
-        {offline ? `${pending} queued` : "Saving…"}
-      </span>
-    );
-  }
-  if (failed) {
-    return (
-      <span className="status-pill status-offline" role="status" title="The edit stayed on this device">
-        Couldn&apos;t save
-      </span>
-    );
-  }
-  if (!at) return null;
-  let time = at;
-  try {
-    time = new Date(at).toLocaleTimeString();
-  } catch {
-    // Keep the raw timestamp.
-  }
-  return (
-    <span className="status-pill" role="status" title={`Board saved on the server at ${at}`}>
-      Saved {time}
-    </span>
   );
 }

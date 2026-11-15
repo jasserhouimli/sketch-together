@@ -1,19 +1,16 @@
 using System.Data;
 using Microsoft.EntityFrameworkCore;
+using SketchTogether.Server.Modules.Boards.Domain;
 
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Boards.Infrastructure;
 
 /// <summary>
-/// Startup schema fixes for databases created before a column existed.
-/// EnsureCreated only creates a missing database, so an existing boards.db
-/// needs the edit-key column added explicitly.
+/// Startup schema migration helpers for SQLite databases.
 /// </summary>
 public static class BoardSchema
 {
     /// <summary>
-    /// Adds the nullable <c>EditKeyHash</c> column when an older SQLite database
-    /// lacks it. Null means the board predates edit links and stays open; see
-    /// <see cref="Board.EditKeyHash"/>. Idempotent.
+    /// Adds the nullable <c>EditKeyHash</c> column when an older SQLite database lacks it. Idempotent.
     /// </summary>
     public static void EnsureEditKeyColumn(BoardsDbContext db)
     {

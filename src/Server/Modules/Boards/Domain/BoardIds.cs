@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
 
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Boards.Domain;
 
-/// <summary>Shareable room IDs: 12 lowercase alphanumerics (no look-alikes).</summary>
+/// <summary>
+/// Shareable room IDs: 12 lowercase alphanumerics (no look-alikes).
+/// </summary>
 public static class BoardIds
 {
     private const string Alphabet = "abcdefghjkmnpqrstuvwxyz23456789";

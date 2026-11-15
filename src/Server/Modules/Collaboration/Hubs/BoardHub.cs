@@ -1,53 +1,64 @@
-using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using SketchTogether.Server.Modules.Boards.Domain;
+using SketchTogether.Server.Modules.Boards.Infrastructure;
+using SketchTogether.Server.Modules.Collaboration.Contracts;
+using SketchTogether.Server.Modules.Collaboration.Domain;
+using SketchTogether.Server.Modules.Collaboration.Services;
 
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Collaboration.Hubs;
 
 /// <summary>
-/// One room per board. Clients join, send validated actions, and receive
-/// accepted actions from others. Server order is the order: a per-board lock
-/// serializes load-apply-save-broadcast; actionIds dedupe redeliveries.
-///
-/// Two channels share the connection:
-/// - durable: <see cref="SendAction"/>, validated and persisted, then broadcast;
-/// - ephemeral: cursors and drag previews, relayed to the room and never stored;
-///   display names are presence only, so a rename never touches the board row.
-///   Losing one is invisible; the durable action on release is the truth.
+/// Real-time gateway hub for collaborative boards.
+/// Handles client connections, dispatches mutations to persistence,
+/// and broadcasts events to board rooms.
 /// </summary>
-public sealed class BoardHub(BoardsDbContext db) : Hub
+public sealed class BoardHub : Hub
 {
-    /// <summary>Longest note id we will relay a drag preview for.</summary>
     private const int MaxRelayedIdLength = 100;
 
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new();
-    private static readonly BoardPresence Presence = new();
-    private static readonly object SeenLock = new();
-    private static readonly Dictionary<string, HashSet<string>> SeenActions = new();
+    private readonly BoardsDbContext _db;
+    private readonly IBoardLockManager _lockManager;
+    private readonly IBoardPresenceTracker _presence;
+    private readonly IActionDeduplicator _deduplicator;
+
+    // Default shared singletons for backwards compatibility when instantiated directly in tests
+    private static readonly IBoardLockManager SharedLockManager = new InMemoryBoardLockManager();
+    private static readonly IBoardPresenceTracker SharedPresence = new BoardPresence();
+    private static readonly IActionDeduplicator SharedDeduplicator = new InMemoryActionDeduplicator();
+
+    public BoardHub(
+        BoardsDbContext db,
+        IBoardLockManager? lockManager = null,
+        IBoardPresenceTracker? presence = null,
+        IActionDeduplicator? deduplicator = null)
+    {
+        _db = db;
+        _lockManager = lockManager ?? SharedLockManager;
+        _presence = presence ?? SharedPresence;
+        _deduplicator = deduplicator ?? SharedDeduplicator;
+    }
 
     /// <summary>
-    /// Join result: current items, the caller's id, the roster, and whether the
-    /// connection may change the board. The view link joins read-only; editing
-    /// needs the key from the edit link.
+    /// Join result: current items, caller id, participants, and edit permission.
     /// </summary>
     public async Task<JoinResult> JoinBoard(string boardId, string? displayName, string? editKey)
     {
         if (!BoardIds.IsValid(boardId))
             throw new HubException("Board id must be 12 lowercase letters/digits.");
 
-        var row = await db.Boards.FindAsync([boardId]);
+        var row = await _db.Boards.FindAsync([boardId]);
         if (row is null) throw new HubException("No board with that link.");
 
         var access = BoardAccess.CheckEditKey(row, editKey);
-        // A link that carries a bad key is an error rather than a silent
-        // downgrade to viewing, so a truncated/edited link is obvious.
         if (access is BoardEditAccess.Invalid)
             throw new HubException("That edit link is not valid.");
+
         var canEdit = access is BoardEditAccess.LegacyOpen or BoardEditAccess.Granted;
 
         await Groups.AddToGroupAsync(Context.ConnectionId, Room(boardId));
-        Presence.Join(boardId, Context.ConnectionId, displayName, canEdit);
+        _presence.Join(boardId, Context.ConnectionId, displayName, canEdit);
         await BroadcastRosterAsync(boardId);
 
         return new JoinResult(
@@ -55,41 +66,34 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
     }
 
     /// <summary>
-    /// Changes the caller's display name and re-broadcasts the roster, so the
-    /// room and its cursors pick it up. Names are cosmetic: sanitized like a
-    /// join, never persisted, and no other participant's state is touched.
+    /// Renames caller and updates the room roster.
     /// </summary>
     public async Task Rename(string? displayName)
     {
-        var boardId = Presence.Rename(Context.ConnectionId, displayName);
+        var boardId = _presence.Rename(Context.ConnectionId, displayName);
         if (boardId is not null) await BroadcastRosterAsync(boardId);
     }
 
-    /// <summary>Applies one action; returns the save timestamp as the ack.</summary>
+    /// <summary>
+    /// Validates, serializes, persists, and broadcasts a board action.
+    /// </summary>
     public async Task<DateTimeOffset> SendAction(BoardActionEnvelope envelope)
     {
-        var membership = Presence.Find(Context.ConnectionId)
+        var membership = _presence.Find(Context.ConnectionId)
             ?? throw new HubException("Join a board before sending actions.");
         if (!membership.Participant.CanEdit)
             throw new HubException("This board is view-only; open its edit link to make changes.");
 
         var boardId = membership.BoardId;
-        var gate = await Locks.GetOrAdd(boardId, _ => new SemaphoreSlim(1, 1))
-            .WaitAsync(TimeSpan.FromSeconds(10));
-        if (!gate) throw new HubException("Server is busy; retry the action.");
-        try
-        {
-            return await ApplyAsync(envelope, boardId);
-        }
-        finally
-        {
-            Locks[boardId].Release();
-        }
+        using var lockHandle = await _lockManager.AcquireLockAsync(boardId, TimeSpan.FromSeconds(10));
+        if (lockHandle is null)
+            throw new HubException("Server is busy; retry the action.");
+
+        return await ApplyAsync(envelope, boardId);
     }
 
     /// <summary>
-    /// Relays the caller's cursor to the rest of the room. Ephemeral: a dropped
-    /// frame is invisible, so out-of-range input is ignored rather than thrown.
+    /// Relays caller cursor coordinates to peers in the board room.
     /// </summary>
     public async Task UpdateCursor(double x, double y)
     {
@@ -108,9 +112,7 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
     }
 
     /// <summary>
-    /// Relays an in-progress note drag. Ephemeral on purpose: intermediate
-    /// positions are not worth persisting, so a crash mid-drag leaves the note
-    /// where it was and the release sends the one durable item.move.
+    /// Relays ephemeral note drag previews.
     /// </summary>
     public async Task DragPreview(string noteId, double x, double y)
     {
@@ -130,25 +132,19 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
     private async Task<DateTimeOffset> ApplyAsync(BoardActionEnvelope envelope, string boardId)
     {
         var check = BoardActionValidator.Validate(boardId, envelope);
-        if (!check.IsSuccess) throw new HubException(check.Error!);
+        if (!check.IsSuccess) throw new HubException(check.Error.Message);
 
-        bool duplicate;
-        lock (SeenLock)
+        var isNewAction = _deduplicator.TryTrack(boardId, envelope.ActionId);
+        if (!isNewAction)
         {
-            if (!SeenActions.TryGetValue(boardId, out var seen))
-                SeenActions[boardId] = seen = [];
-            duplicate = !seen.Add(envelope.ActionId);
-            if (!duplicate && seen.Count > 5000) seen.Clear(); // bounded memory; refresh heals gaps
-        }
-        if (duplicate)
-        {
-            // Redelivery: already applied — ack with the current save time.
-            return await db.Boards.Where(b => b.Id == boardId)
+            // Duplicate delivery: already applied, return current timestamp
+            return await _db.Boards.Where(b => b.Id == boardId)
                 .Select(b => b.UpdatedAt).FirstOrDefaultAsync();
         }
 
-        var row = await db.Boards.FindAsync([boardId]);
+        var row = await _db.Boards.FindAsync([boardId]);
         if (row is null) throw new HubException("Board no longer exists.");
+
         JsonArray items;
         try
         {
@@ -156,11 +152,12 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
         }
         catch (Exception)
         {
-            items = new JsonArray(); // corrupt row heals to empty rather than 500
+            items = new JsonArray();
         }
+
         row.ItemsJson = BoardActionApplier.Apply(items, check.Value!).ToJsonString();
         row.UpdatedAt = DateTimeOffset.UtcNow;
-        await db.SaveChangesAsync();
+        await _db.SaveChangesAsync();
 
         await Clients.OthersInGroup(Room(boardId)).SendAsync("ReceiveAction", new
         {
@@ -168,19 +165,20 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
             type = check.Value!.Type,
             item = check.Value.Item,
         });
+
         return row.UpdatedAt;
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        var boardId = Presence.Leave(Context.ConnectionId);
+        var boardId = _presence.Leave(Context.ConnectionId);
         if (boardId is not null) await BroadcastRosterAsync(boardId);
         await base.OnDisconnectedAsync(exception);
     }
 
     private bool TryMembership(out Membership membership)
     {
-        var found = Presence.Find(Context.ConnectionId);
+        var found = _presence.Find(Context.ConnectionId);
         membership = found!;
         return found is not null;
     }
@@ -188,8 +186,8 @@ public sealed class BoardHub(BoardsDbContext db) : Hub
     private Task BroadcastRosterAsync(string boardId) =>
         Clients.Group(Room(boardId)).SendAsync("PresenceChanged", RosterDto(boardId));
 
-    private static object[] RosterDto(string boardId) =>
-        Presence.Roster(boardId)
+    private object[] RosterDto(string boardId) =>
+        _presence.Roster(boardId)
             .Select(p => new { id = p.ConnectionId, name = p.Name, color = p.Color })
             .ToArray();
 

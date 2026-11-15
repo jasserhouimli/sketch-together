@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using SketchTogether.Server.Features.Boards;
 
 namespace Server.Tests;
 

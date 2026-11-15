@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace SketchTogether.Server.Features.Boards;
+namespace SketchTogether.Server.Modules.Boards.Domain;
 
 /// <summary>
 /// Pure item-list transitions for validated actions. Operates on a clone so
@@ -49,7 +49,6 @@ public static class BoardActionApplier
 
     private static void Move(JsonArray items, System.Text.Json.JsonElement move)
     {
-        // Only notes carry x/y; moving anything else is a no-op.
         var x = move.GetProperty("x").GetDouble();
         var y = move.GetProperty("y").GetDouble();
         foreach (var node in items)
